@@ -168,6 +168,32 @@ A bare-ACP control experiment:
 - The only advice for a user: when the target provider is down, the first turn after switching
   will fail; switch back or wait.
 
+## Windows: 9 unit tests fail ✗ (`windows.yml` now runs on demand only)
+
+**Status**: the first real run of `.github/workflows/windows.yml` (2026-11-21, fresh repository)
+failed **10 of 402 unit tests**. Two were **real product defects** and were fixed on the spot:
+
+- `findExecutable` decided "is this a path?" by looking for `/` → a Windows path,
+  `C:\…\node.exe`, contains none, so it was treated as a **command NAME** and looked up in PATH,
+  returning `undefined` for a file that plainly exists;
+- `matchesDirectory` read only `HOME` → Windows sets `USERPROFILE`, so `~` never expanded.
+
+**The remaining 9 are still real defects**, not test problems:
+
+| Failing test | What it means |
+|---|---|
+| `/cd move` ×2 | moving the working directory does not take effect on Windows |
+| the `!command` shell ×2 + the shell list ×2 | cursor paging and byte handling break there |
+| `skill attachment` | the attachment path |
+| `workspace` ×2 | resolving a session's directory |
+
+**Why the trigger is manual for now**: a job that is red on every push leaves `main` permanently
+red, and **a permanently red workflow is one nobody reads** — so a genuine regression later slips
+through unnoticed. The fix is to work the list down; **the commit that turns it green puts `push`
+and `pull_request` back**.
+
+Run it by hand: `gh workflow run windows.yml`.
+
 ## TODO (pending fix): dsh's tool cards show `{` instead of a title
 
 Reported from `~/projects/webapp` with `oc-acp-client -- dsh --profile <profile>` (a profile running the

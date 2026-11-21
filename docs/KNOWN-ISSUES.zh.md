@@ -148,6 +148,29 @@ agent 请求客户端跑命令，而本桥**故意不宣告**该能力 ✓，见
 - 留给使用者的唯一建议：目标 provider 不可用时，换过去的下一个回合会失败；换回来或等 provider 恢复。
 
 
+## Windows：单测有 9 个失败 ✗（`windows.yml` 已改为手动触发）
+
+**状态**：`.github/workflows/windows.yml` 第一次真正跑（2026-11-21，新仓库）时 **402 个单测挂了 10 个**。
+其中 2 个是**真实产品缺陷**，当场修了：
+
+- `findExecutable` 用「含 `/`」判断是不是路径 → Windows 的 `C:\…\node.exe` 不含 `/`，
+  被当成**命令名**去 PATH 里找，明明存在的文件返回 `undefined`；
+- `matchesDirectory` 只读 `HOME` → Windows 设的是 `USERPROFILE`，`~` 永远不展开。
+
+**剩下 9 个仍是真实缺陷**，不是测试的问题：
+
+| 失败的测试 | 意味着什么 |
+|---|---|
+| `/cd move` ×2 | 切目录在 Windows 上不生效 |
+| `!command` 的 shell ×2 + shell 列表 ×2 | 分页与字节处理在 Windows 上出错 |
+| `skill attachment` | 技能附件路径 |
+| `workspace` ×2 | 工作目录解析 |
+
+**为什么先把触发改成手动**：每次 push 都红，`main` 就永远是红的，而**永远红的工作流没人看** ——
+真出现回归时反而被淹没。改法是逐个修；**修绿的那一次提交里，同时把 `push` / `pull_request` 触发加回来**。
+
+手动跑一次：`gh workflow run windows.yml`。
+
 ## TODO (pending fix): dsh's tool cards show `{` instead of a title
 
 Reported from `~/projects/webapp` with `oc-acp-client -- dsh --profile <profile>`
