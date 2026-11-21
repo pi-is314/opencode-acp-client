@@ -162,6 +162,11 @@ export class AcpClient extends EventEmitter<AcpEvents> {
     });
 
     this.child.stdout.setEncoding('utf8');
+    // ★ `onLog` was declared, passed by two call sites, and never consumed — the event was
+    // the only real sink. The practical cost: the session-discovery client in
+    // `src/server.ts` passed `onLog` and its ACP frames were dropped on the floor, so a failed
+    // discovery explained nothing. Wired here so the option means what its name says.
+    if (options.onLog) this.on('log', (line: string) => options.onLog?.(line));
     this.child.stdout.on('data', (chunk: string) => this.onStdout(chunk));
 
     this.child.stderr.setEncoding('utf8');
@@ -862,6 +867,13 @@ export class AcpClient extends EventEmitter<AcpEvents> {
 
   private write(message: unknown): void {
     if (this.closed) return;
+    // ★ The outbound half of the trace. `_TRACE` used to log only `[recv]`, so debugging a
+    // disagreement with an agent showed what it said and nothing about what we asked — which
+    // is how a bad request shape (a `configOptions` where the schema wants `configId`) looked
+    // like a misbehaving agent. Truncated like the inbound side: the frames are long.
+    if (process.env.OPENCODE_ACP_CLIENT_TRACE) {
+      this.emit('log', `[send] ${JSON.stringify(message).slice(0, 4000)}`);
+    }
     try {
       this.child.stdin.write(`${JSON.stringify(message)}\n`);
     } catch (err) {
