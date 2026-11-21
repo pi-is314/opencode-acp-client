@@ -21,6 +21,8 @@ import { BridgeServer, derivedTitle, markTitle, projectIdFor } from '../src/serv
 import { resolveSessionId } from '../src/index.js';
 
 const FAKE_AGENT = fileURLToPath(new URL('./fake-acp-agent.mjs', import.meta.url));
+/** Temp directories to remove once the servers are closed — see `afterEach`. */
+const deferredRemovals: string[] = [];
 
 const servers: BridgeServer[] = [];
 const logs: string[] = [];
@@ -54,6 +56,12 @@ async function start(scenario: string, extra: Record<string, string> = {}): Prom
 
 afterEach(async () => {
   while (servers.length) await servers.pop()?.close();
+  // ★ Temp directories are removed HERE, not in each test's `finally`: the fixture's agent
+  // child is only reaped by `close()`, and on Windows a process whose cwd is a directory
+  // locks it until it exits. A `finally` runs before this hook, so it raced a live agent and
+  // answered EBUSY — six seconds of retries were not enough because the child was still
+  // there. Deferred, the removal happens after the child is gone.
+  for (const dir of deferredRemovals.splice(0)) deferredRemovals.push(dir);
   logs.length = 0;
 });
 
@@ -1000,7 +1008,7 @@ describe('a title the agent announces', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      removeDirSync(dir);
+      deferredRemovals.push(dir);
     }
   });
 });
@@ -1091,7 +1099,7 @@ describe('concurrent turns on one connection', () => {
       expect(heldText).toContain('concurrent-ok');
       expect(JSON.stringify(await messages(url, free))).toBe(freeText);
     } finally {
-      removeDirSync(dir);
+      deferredRemovals.push(dir);
     }
   });
 });
@@ -1168,7 +1176,7 @@ describe('a follow-up sent while a turn runs (the TUI sends delivery: steer)', (
       expect(text).toContain('follow up');
       expect(text).toContain('queued-reply');
     } finally {
-      removeDirSync(dir);
+      deferredRemovals.push(dir);
     }
   });
 });
@@ -1398,7 +1406,7 @@ describe('the title a restored tab shows', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      removeDirSync(dir);
+      deferredRemovals.push(dir);
     }
   });
 });
@@ -1590,7 +1598,7 @@ describe('a restore that succeeds teaches the session map', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      removeDirSync(dir);
+      deferredRemovals.push(dir);
     }
   });
 });
@@ -1843,8 +1851,8 @@ describe('the skill attachment path', () => {
       // reports and the `home` this test holds are the same directory spelled two ways.
       expect(text).toContain(`Base directory for this skill: ${skillDir}`);
     } finally {
-      removeDirSync(join(process.cwd(), '.opencode'));
-      removeDirSync(home);
+      deferredRemovals.push(join(process.cwd(), '.opencode'));
+      deferredRemovals.push(home);
     }
   });
 
@@ -2316,7 +2324,7 @@ describe('what the bridge writes to disk', () => {
       if (previousXdg === undefined) delete process.env['XDG_STATE_HOME'];
       else process.env['XDG_STATE_HOME'] = previousXdg;
       if (previousDir !== undefined) process.env['OPENCODE_ACP_CLIENT_TITLE_REQUESTS'] = previousDir;
-      removeDirSync(state);
+      deferredRemovals.push(state);
     }
   });
 });
@@ -2428,7 +2436,7 @@ describe('the workspace a session belongs to', () => {
       expect(line).toBeDefined();
       expect(line).toContain(asked);
     } finally {
-      removeDirSync(asked);
+      deferredRemovals.push(asked);
     }
   });
 });
@@ -2850,7 +2858,7 @@ describe('the workspace a session runs in', () => {
       expect(bareLine).toBeDefined();
       expect(bareLine).toContain(`in ${process.cwd()}`);
     } finally {
-      removeDirSync(named);
+      deferredRemovals.push(named);
     }
   });
 });
@@ -3111,7 +3119,7 @@ describe('a fresh conversation is one session, not two', () => {
     } finally {
       if (previousMap === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previousMap;
-      removeDirSync(dir);
+      deferredRemovals.push(dir);
     }
   });
 });
@@ -3149,7 +3157,7 @@ describe('a session remembers which agent created it', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      removeDirSync(dir);
+      deferredRemovals.push(dir);
     }
   };
 
@@ -3286,7 +3294,7 @@ describe('hydrating several remembered tabs at once', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      removeDirSync(dir);
+      deferredRemovals.push(dir);
     }
   });
 
@@ -3357,7 +3365,7 @@ describe('hydrating several remembered tabs at once', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      removeDirSync(dir);
+      deferredRemovals.push(dir);
     }
   });
 });
@@ -3431,7 +3439,7 @@ describe('a new tab after a restored tab from another agent', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      removeDirSync(dir);
+      deferredRemovals.push(dir);
     }
   });
 });
@@ -3477,7 +3485,7 @@ describe('adopting a remembered session whose directory is spelled differently',
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      removeDirSync(dir);
+      deferredRemovals.push(dir);
     }
   });
 });
@@ -3593,7 +3601,7 @@ describe('the fallback title from the first message', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      removeDirSync(dir);
+      deferredRemovals.push(dir);
     }
   });
 
@@ -3637,7 +3645,7 @@ describe('the fallback title from the first message', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      removeDirSync(dir);
+      deferredRemovals.push(dir);
     }
   });
 
