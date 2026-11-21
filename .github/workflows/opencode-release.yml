@@ -1,0 +1,97 @@
+name: opencode release
+
+# Watches opencode's own releases: a new release >= 2.0.0 must pass this
+# repository's whole gate against that exact binary.
+#
+# The verification itself lives in scripts/check-opencode-version.sh, so a red
+# run here can be reproduced locally with one command:
+#
+#   bash scripts/check-opencode-version.sh latest-v2
+#
+# This file is only the timer and the reporting around it. Note that the GitHub
+# API is deliberately *not* used to find the release: an unauthenticated API call
+# gets rate-limited, and a rate-limited watcher sees "no releases" and stays
+# green forever. The releases atom feed has no such quota.
+
+on:
+  schedule:
+    # Daily. Releases are not that frequent, and a full run downloads ~200 MB.
+    - cron: '17 6 * * *'
+  repository_dispatch:
+    types: [opencode-release]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'opencode version to verify (default: newest >= 2.0.0)'
+        required: false
+        default: latest-v2
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install tmux (the real-TUI acceptance needs it) and the spec checker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux zsh unzip python3-pip
+          python3 -m pip install --user jsonschema
+
+      - name: Verify against one opencode version
+        id: verify
+        run: |
+          VERSION="${{ github.event.client_payload.version || github.event.inputs.version || 'latest-v2' }}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          bash scripts/check-opencode-version.sh "$VERSION"
+
+      # Keep what that version rendered, pass or fail: on a failure it is the
+      # evidence, on a pass it is the thing to diff against the next release.
+      - name: Keep the rendered screens
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tui-screens
+          path: .artifacts/
+          if-no-files-found: ignore
+
+      # A failing gate is news about opencode, not about this commit, so it gets
+      # an issue rather than only a red check nobody watches.
+      - name: Report a failing release
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.verify.outputs.version || github.event.client_payload.version || github.event.inputs.version || 'latest-v2' }}"
+          TITLE="opencode release gate failed: $VERSION"
+          if gh issue list --state open --search "$TITLE in:title" --json number --jq 'length' | grep -qv '^0$'; then
+            echo "an open issue already covers $VERSION"
+            exit 0
+          fi
+          gh issue create --title "$TITLE" --body "$(printf '%s\n' \
+            "The gate failed against opencode \`$VERSION\`." \
+            "" \
+            "Run it locally to see the same failure:" \
+            "" \
+            '```bash' \
+            "bash scripts/check-opencode-version.sh $VERSION" \
+            '```' \
+            "" \
+            "Job: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}")"

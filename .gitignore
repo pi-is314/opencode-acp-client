@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+.cache/
+.artifacts/
+
+# Local records of fixed defects: docs/KNOWN-ISSUES.* keeps only what is still open.
+docs/LOCAL-FIXED-ISSUES.*.md

@@ -1,0 +1,17 @@
+[
+  {
+    "role": "assistant",
+    "type": "assistant",
+    "agent": "recorded",
+    "content": [
+      {
+        "type": "reasoning",
+        "text": "The user wants me to reply with exactly: hi"
+      },
+      {
+        "type": "text",
+        "text": "hi"
+      }
+    ]
+  }
+]

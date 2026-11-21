@@ -1,0 +1,16 @@
+#!/bin/sh
+# Refuse a commit whose author email is not the project's public one.
+#
+# Why a hook and not just `git config user.email`: local config lives in .git/config, which is
+# never cloned. A fresh clone — or a machine whose global identity is a work address — would
+# silently commit under the wrong email, and an address in git history is public forever.
+#
+# Enabled by `git config core.hooksPath .githooks`, which `pnpm install` runs (the `prepare`
+# script). To commit under another address on purpose, change EXPECTED here in the same commit.
+EXPECTED="ysrj@me.com"
+ACTUAL="$(git config user.email)"
+if [ "$ACTUAL" != "$EXPECTED" ]; then
+  echo "✗ commit email is '$ACTUAL', expected '$EXPECTED'" >&2
+  echo "  fix: git config user.email $EXPECTED" >&2
+  exit 1
+fi

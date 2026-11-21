@@ -1,0 +1,68 @@
+{
+  "name": "opencode-acp-client",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pi-is314/opencode-acp-client.git"
+  },
+  "homepage": "https://github.com/pi-is314/opencode-acp-client#readme",
+  "bugs": {
+    "url": "https://github.com/pi-is314/opencode-acp-client/issues"
+  },
+  "type": "module",
+  "description": "A terminal ACP client whose interface is the opencode v2 TUI: it launches the TUI and connects it to any ACP agent over stdio.",
+  "keywords": [
+    "acp",
+    "agent-client-protocol",
+    "opencode",
+    "tui",
+    "cli",
+    "agent"
+  ],
+  "bin": {
+    "opencode-acp-client": "./dist/index.js",
+    "oc-acp-client": "./dist/index.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && chmod +x dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev": "node --experimental-strip-types src/index.ts",
+    "verify": "bash scripts/verify.sh",
+    "verify:version": "bash scripts/check-opencode-version.sh",
+    "watch:opencode": "bash scripts/watch-opencode-releases.sh --once",
+    "e2e": "bash scripts/e2e-smoke.sh",
+    "e2e:entry": "bash scripts/e2e-entry.sh",
+    "e2e:agent": "bash scripts/e2e-real-agent.sh",
+    "e2e:tui": "bash scripts/e2e-real-tui.sh",
+    "e2e:epilogue": "bash scripts/e2e-epilogue.sh",
+    "e2e:dsh-acp": "bash scripts/e2e-dsh-acp.sh",
+    "prepack": "pnpm build",
+    "prepare": "git config core.hooksPath .githooks 2>/dev/null || true; node -e \"process.exit(require('fs').existsSync('dist/index.js')?0:1)\" || npm install --no-save --no-audit --no-fund typescript @types/node >/dev/null 2>&1 && tsc -p tsconfig.json && chmod +x dist/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "files": [
+    "dist"
+  ],
+  "opencodeVersion": {
+    "range": ">=2.0.0",
+    "tested": [
+      "2.0.28",
+      "2.0.27",
+      "2.0.22"
+    ],
+    "note": "The client's HTTP/SSE surface is what this bridge serves; v1 speaks a different event vocabulary and is rejected by src/opencode-bin.ts."
+  }
+}
