@@ -739,6 +739,13 @@ ok('turn settled with the reply intact')
 PY
 
 # The client's contract for an update it cannot translate is to *say so*.
+#
+# ★ Matched as a PREFIX, deliberately. The line now reads
+#   `unknown session/update: <variant> (dropped by schema validation)`
+# for a variant outside the schema, and `unknown session/update: <variant>` for one the
+# schema allows but the translator does not handle. What this scenario is about is the first
+# half — the client says the variant's name instead of swallowing it — and pinning the whole
+# line would re-fail the day the consequence is described differently.
 for needle in \
   'unknown session/update: notice' \
   'unknown session/update: compaction_update' \

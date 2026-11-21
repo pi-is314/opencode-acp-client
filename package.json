@@ -65,5 +65,9 @@
       "2.0.22"
     ],
     "note": "The client's HTTP/SSE surface is what this bridge serves; v1 speaks a different event vocabulary and is rejected by src/opencode-bin.ts."
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^2.8.0",
+    "zod": "^4.6.7"
   }
 }

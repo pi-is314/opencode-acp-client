@@ -491,9 +491,12 @@ async function runPrompt(sessionId, prompt) {
   if (process.env.FAKE_ACP_PLAN === '1') {
     update(sessionId, {
       sessionUpdate: 'plan',
+      // `PlanEntry` requires `priority` (schema v1), not only content+status. The SDK's
+      // validation rejects an entry missing it, and then the client never gets to log the
+      // thing this scenario is about.
       entries: [
-        { content: 'first', status: 'completed' },
-        { content: 'second', status: 'in_progress' },
+        { content: 'first', status: 'completed', priority: 'high' },
+        { content: 'second', status: 'in_progress', priority: 'medium' },
       ],
     })
   }
@@ -642,8 +645,17 @@ async function runPrompt(sessionId, prompt) {
     // An agent that does everything the spec says it must not. The client is
     // required to log and carry on, never to crash and never to leave the turn
     // open.
-    update(sessionId, { sessionUpdate: 'notice', message: 'we never advertised notices' })
-    update(sessionId, { sessionUpdate: 'compaction_update', status: 'started' })
+    // `Notice` requires `severity` and `title` (schema v1); an earlier version sent
+    // `{ message }`, which the SDK's validation rejects before the client can log it. The
+    // shape here is the one the spec defines, so the scenario tests what it says it tests:
+    // a WELL-FORMED notice that this client simply does not handle.
+    update(sessionId, {
+      sessionUpdate: 'notice',
+      severity: 'warning',
+      title: 'we never advertised notices',
+    })
+    // `CompactionUpdate` needs `compactionId` as well; see the notice note above.
+    update(sessionId, { sessionUpdate: 'compaction_update', compactionId: 'cmp_1', status: 'started' })
     update(sessionId, { sessionUpdate: 'some_unknown_update_v9', payload: { nope: true } })
     update(sessionId, {
       sessionUpdate: 'tool_call_update',
@@ -651,7 +663,15 @@ async function runPrompt(sessionId, prompt) {
       status: 'completed',
       content: [{ type: 'content', content: { type: 'text', text: 'ghost' } }],
     })
-    update(sessionId, { sessionUpdate: 'agent_message_chunk' }) // content missing
+    // ★ Every other frame here is deliberately ill-formed at the PROTOCOL-RULES level (an
+    // update for a tool call that was never created, say) — but each one still has to be
+    // schema-VALID, or the SDK's validation drops it before the client can log anything.
+    // This one keeps its `content` for exactly that reason: the scenario is "the client
+    // survives what the spec forbids", not "the client survives frames that are not ACP".
+    update(sessionId, {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'a chunk for a session the agent invented' },
+    })
   }
 
   // Report what actually arrived, so a test can tell "the client forwarded the
