@@ -12,9 +12,14 @@ import { rmSync } from 'node:fs';
  * `force` already makes "not there" harmless; this only adds patience, and stays synchronous
  * so the existing `try/finally` blocks can keep calling it as they did.
  *
+ * Twelve attempts half a second apart is deliberate: the lock is released by the agent
+ * child finishing its own exit, which on a loaded CI runner took longer than the
+ * 6 x 200 ms the first version allowed. Six seconds still fails a genuinely stuck
+ * directory rather than hanging the suite.
+ *
  * Call it from a `finally`, never from a test's happy path: the sleep is real time.
  */
-export function removeDirSync(dir: string, attempts = 6, waitMs = 200): void {
+export function removeDirSync(dir: string, attempts = 12, waitMs = 500): void {
   for (let attempt = 0; ; attempt += 1) {
     try {
       rmSync(dir, { recursive: true, force: true });

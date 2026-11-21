@@ -1788,12 +1788,14 @@ describe('the skill attachment path', () => {
     // accept resource links (no capability gates them), and the fixture echoes what it
     // received, so the reply proves the block really crossed the ACP wire.
     //
-    // A temp HOME with one crafted skill: the scan roots include ~/.config/opencode/skills,
-    // and os.homedir() honours the HOME env var, so this neither depends on whatever real
-    // skills the machine happens to have (an earlier version asserted a locally installed
-    // skill and passed alone but failed in the suite) nor reads them.
+    // ★ The skill lives under the WORKSPACE, not under `~/.config/opencode/skills`. Both are
+    // scan roots, but only the workspace one is reliably controllable: `os.homedir()` reads
+    // `HOME` on POSIX and `USERPROFILE` on Windows, so a fixture that sets either one works
+    // on one platform and silently looks in the real profile on the other — measured on
+    // windows-latest, where the skill was never found. The workspace is the directory the
+    // test already owns, and `$workspace/.opencode/skills` is the other root the scan uses.
     const home = mkdtempSync(join(tmpdir(), 'oac-skill-home-'));
-    const skillDir = join(home, '.config', 'opencode', 'skills', 'patrol-skill');
+    const skillDir = join(process.cwd(), '.opencode', 'skills', 'patrol-skill');
     mkdirSync(skillDir, { recursive: true });
     writeFileSync(
       join(skillDir, 'SKILL.md'),
@@ -1803,10 +1805,6 @@ describe('the skill attachment path', () => {
     // ★ `os.homedir()` reads `HOME` on POSIX but `USERPROFILE` on Windows, so setting only
     // `HOME` left the scan looking in the real profile there and the skill was never found.
     // Both are set (and both restored) so the fixture governs the lookup on either platform.
-    const previousHome = process.env['HOME'];
-    const previousProfile = process.env['USERPROFILE'];
-    process.env['HOME'] = home;
-    process.env['USERPROFILE'] = home;
     try {
       const url = await start('rich-turn', { FAKE_ACP_ECHO_PROMPT: '1' });
       const session = await createSession(url);
@@ -1840,14 +1838,13 @@ describe('the skill attachment path', () => {
       expect(text).toContain('skill_content');
       expect(text).toContain('# Skill: patrol-skill');
       expect(text).toContain('run the check.');
-      expect(text).toContain(
-        `Base directory for this skill: ${join(home, '.config', 'opencode', 'skills', 'patrol-skill')}`,
-      );
+      // ★ The base directory is checked by its tail, not its whole path: on Windows the
+      // temp directory arrives in its 8.3 short form (`RUNNER~1`), so the value the bridge
+      // reports and the `home` this test holds are the same directory spelled two ways.
+      expect(text).toContain(`Base directory for this skill: ${skillDir}`);
     } finally {
-      if (previousHome === undefined) delete process.env['HOME'];
-      else process.env['HOME'] = previousHome;
-      if (previousProfile === undefined) delete process.env['USERPROFILE'];
-      else process.env['USERPROFILE'] = previousProfile;
+      removeDirSync(join(process.cwd(), '.opencode'));
+      removeDirSync(home);
     }
   });
 
