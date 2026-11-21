@@ -128,14 +128,65 @@ Facts gathered along the way, all worth keeping:
 
 ## Committing
 
-Commits must be authored as `ysrj@me.com`. `pnpm install` runs the `prepare` script, which points
-`core.hooksPath` at `.githooks/`; its `pre-commit` refuses any other email. This exists because
-`git config user.email` lives in `.git/config`, which is never cloned — a fresh clone on a machine
-whose global identity is a work address would commit under that address, and an email in git
-history is public for good.
+**Every commit in this repository is authored as `PI-is314`**:
+
+```
+PI-is314 <359395502+pi-is314@users.noreply.github.com>
+```
+
+`pnpm install` runs `prepare`, which points `core.hooksPath` at `.githooks/`; its `pre-commit`
+refuses any other email. This exists because `git config user.email` lives in `.git/config`,
+which is never cloned — a fresh clone on a machine whose global identity is another account would
+commit under that account, and git history is public for good once pushed.
+
+That address is GitHub's **noreply** form (`<account id>+<account name>@users.noreply.github.com`):
+it makes GitHub attribute the commit to `pi-is314` without putting a real mailbox into public
+history.
 
 ```bash
-git config user.email ysrj@me.com   # once per clone, if the hook stops you
+git config user.name  PI-is314
+git config user.email 359395502+pi-is314@users.noreply.github.com   # once per clone
+```
+
+## Releasing
+
+The version lives in **three places that must agree**: `version` in `package.json`, the git
+**annotated tag** (`v<version>`), and the version published to npm. A release moves all three
+together:
+
+```bash
+# 1. a clean tree and a green gate (see "Testing" above)
+git status --short          # must be empty
+pnpm typecheck && pnpm test
+
+# 2. bump: npm commits for you (as PI-is314 — the hook refuses anything else) and tags
+npm version patch           # or minor / major; produces a tag like v0.1.1
+
+# 3. publish. ★ Name the registry and the token explicitly: this machine's default
+#    registry is an internal one, and without --registry the package goes there
+npm publish --registry https://registry.npmjs.org \
+  --//registry.npmjs.org/:_authToken="$(tr -d '[:space:]' < ~/.npm.token)"
+
+# 4. push the commit and the tag (--follow-tags pushes annotated tags only)
+git push --follow-tags
+```
+
+**What npm requires, and what bites**:
+
+- The token must be a **Granular Access Token with "Bypass 2FA" checked**; without it every publish
+  answers `E403 … Two-factor authentication or granular access token with bypass 2fa enabled`.
+  A plain token passes `whoami` and is still refused at publish — the two are not the same test.
+- Right after publishing, `npm view <pkg> version` shows a `0.0.0-stage` placeholder. That is npm's
+  staged publishing; it becomes the real version after about **two minutes**. Not a failure.
+- Publish prereleases with `npm publish --tag next` so they do **not** take over `latest`; otherwise
+  a plain `npm install -g <pkg>` hands people the test build.
+
+**Verify the release** (all three should name the same version):
+
+```bash
+npm view opencode-acp-client version --registry https://registry.npmjs.org
+git tag -l 'v*' --sort=-v:refname | head -1
+node -p "require('./package.json').version"
 ```
 
 ## Running from a checkout

@@ -112,13 +112,62 @@ opencode --server http://127.0.0.1:4096 --print-logs      # 看 TUI
 
 ## 提交
 
-提交的作者邮箱必须是 `ysrj@me.com`。`pnpm install` 会跑 `prepare` 脚本，把 `core.hooksPath`
-指向 `.githooks/`，其中的 `pre-commit` 会拒绝其它邮箱。之所以要这样：`git config user.email`
-存在 `.git/config` 里，**不会随 clone 分发**；在全局身份是工作邮箱的机器上新 clone 一份，就会
-用那个邮箱提交，而 git 历史里的邮箱一旦公开就收不回来。
+本仓库的**每一条提交都必须是 `PI-is314`**：
+
+```
+PI-is314 <359395502+pi-is314@users.noreply.github.com>
+```
+
+`pnpm install` 会跑 `prepare`，把 `core.hooksPath` 指向 `.githooks/`，其中的 `pre-commit`
+会拒绝其它邮箱。之所以要这样：`git config user.email` 存在 `.git/config` 里、**不会随 clone
+分发**；在全局身份是别的账号的机器上新 clone 一份，就会用那个身份提交，而 git 历史一旦公开就收不回来。
+
+那个地址是 GitHub 给的 **noreply** 形式（`<账号 id>+<账号名>@users.noreply.github.com`）：
+既让 GitHub 把提交归到 `pi-is314` 名下，又不把真实邮箱写进公开历史。
 
 ```bash
-git config user.email ysrj@me.com   # 每个 clone 设一次（被 hook 拦住时）
+git config user.name  PI-is314
+git config user.email 359395502+pi-is314@users.noreply.github.com   # 每个 clone 设一次
+```
+
+## 发版
+
+版本号是**三处对齐**的：`package.json` 的 `version`、git 的 **annotated tag**（`v<version>`）、
+以及 npm 上发布出去的那个版本。发一次版就是让这三者同时前进：
+
+```bash
+# 1. 干净的工作区 + 全绿的门控（见上「测试」）
+git status --short          # 应为空
+pnpm typecheck && pnpm test
+
+# 2. 升版本：npm 会自己 commit（身份是 PI-is314，钩子会拦别的）并打 annotated tag
+npm version patch           # 或 minor / major；产出 v0.1.1 这样的 tag
+
+# 3. 发布。★ 必须显式指定 registry 和 token：
+#    本机的默认 registry 是内网源，不加 --registry 会推到那里去
+npm publish --registry https://registry.npmjs.org \
+  --//registry.npmjs.org/:_authToken="$(tr -d '[:space:]' < ~/.npm.token)"
+
+# 4. 推代码和 tag（--follow-tags 只推 annotated tag）
+git push --follow-tags
+```
+
+**npm 那边有几点是必须的**：
+
+- token 要在 npmjs 上生成成 **Granular Access Token 且勾选 “Bypass 2FA”**；否则发布一律
+  `E403 … Two-factor authentication or granular access token with bypass 2fa enabled`。
+  普通 token 能通过 `whoami`，但发布会被拒 —— 两者不是一回事。
+- 发布后会先出现一个 `0.0.0-stage` 占位版本（npm 的暂存发布），约 **2 分钟**后自动变成真正的版本。
+  这期间 `npm view <pkg> version` 看到占位版本不是故障。
+- 预发布版用 `npm publish --tag next`，这样它**不会**抢走 `latest`；
+  否则别人一个 `npm install -g <pkg>` 就会装到测试版。
+
+**验证发版成功**（三处都指向同一个版本）：
+
+```bash
+npm view opencode-acp-client version --registry https://registry.npmjs.org
+git tag -l 'v*' --sort=-v:refname | head -1
+node -p "require('./package.json').version"
 ```
 
 ## 从源码运行

@@ -7,7 +7,7 @@
 #
 # Enabled by `git config core.hooksPath .githooks`, which `pnpm install` runs (the `prepare`
 # script). To commit under another address on purpose, change EXPECTED here in the same commit.
-EXPECTED="ysrj@me.com"
+EXPECTED="359395502+pi-is314@users.noreply.github.com"
 ACTUAL="$(git config user.email)"
 if [ "$ACTUAL" != "$EXPECTED" ]; then
   echo "✗ commit email is '$ACTUAL', expected '$EXPECTED'" >&2
