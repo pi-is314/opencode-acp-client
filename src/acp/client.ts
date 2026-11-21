@@ -21,7 +21,13 @@ import { join } from 'node:path';
 import { writeFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { Readable, Writable } from 'node:stream';
-import { client as sdkClient, ndJsonStream, type ClientConnection, type Stream } from '@agentclientprotocol/sdk';
+import {
+  client as sdkClient,
+  ndJsonStream,
+  RequestError,
+  type ClientConnection,
+  type Stream,
+} from '@agentclientprotocol/sdk';
 
 import {
   CLIENT_CAPABILITIES,
@@ -108,6 +114,13 @@ export function translateSdkError(method: string, err: unknown): AcpError {
   const code = (err as { code?: unknown }).code;
   const message = err instanceof Error ? err.message : String(err);
   if (code === -32601 || /unknown method/i.test(message)) return new AcpMethodNotFound(method);
+  // ★ The SDK's stream says "ACP connection closed" when the transport goes away; what
+  // actually happened is that the agent process died, and that is the wording the user
+  // reads on the message row (and what the smoke's crash scenario asserts). Keep the two
+  // facts together rather than leaving the SDK's phrasing in the UI.
+  if (/ACP connection closed|connection closed/i.test(message)) {
+    return new AcpError('agent exited: ACP connection closed', 'agent-exited');
+  }
   return new AcpError(message, typeof code === 'number' ? code : 'acp-error');
 }
 
@@ -827,9 +840,15 @@ export class AcpClient extends EventEmitter<AcpEvents> {
         // must not happen silently. Note it here, then let the SDK do what it does.
         const update = (msg as { params?: { update?: { sessionUpdate?: unknown } } })?.params?.update;
         if (update && typeof update === 'object' && !AcpClient.KNOWN_UPDATES.has(String(update.sessionUpdate))) {
+          // ★ Say it in the vocabulary the rest of the repo already uses — the smoke and
+          // the translator both speak `unknown session/update: <variant>` — AND say what
+          // happens to it. The second half is not decoration: what "unknown" costs changed
+          // with the SDK. A variant outside the generated schema is dropped by validation
+          // and never reaches the translator, so a reader chasing "why does this render
+          // nothing" must not be sent looking in the translator for it.
           this.emit(
             'log',
-            `[acp] unknown session/update variant '${String(update.sessionUpdate)}'; the SDK will drop it`,
+            `unknown session/update: ${String(update.sessionUpdate)} (dropped by schema validation)`,
           );
           UNKNOWN_UPDATES_SEEN.add(String(update.sessionUpdate));
         }
@@ -861,6 +880,16 @@ export class AcpClient extends EventEmitter<AcpEvents> {
    *    update itself — without overwriting the agent's own keys.
    */
   /** The variants this client knows about; anything else is logged, never dropped silently. */
+  /**
+   * The variants the TRANSLATOR has a branch for — nothing more.
+   *
+   * ★ This list used to hold every variant the spec defines, including `notice`,
+   * `compaction_update` and `compaction_summary_chunk`. Those are not handled anywhere: the
+   * translator has no case for them, so an agent that sends one has its update dropped.
+   * Listing them as "known" silenced the only signal we had, which is a straight breach of
+   * iron rule 3 — measured by smoke scenario 8, which asserts exactly that log line. A
+   * variant belongs here only when something downstream acts on it.
+   */
   static readonly KNOWN_UPDATES = new Set<string>([
     'agent_message_chunk',
     'agent_thought_chunk',
@@ -873,10 +902,6 @@ export class AcpClient extends EventEmitter<AcpEvents> {
     'config_option_update',
     'session_info_update',
     'usage_update',
-    'notice',
-    'compaction_update',
-    'compaction_summary_chunk',
-    'subagent_update',
   ]);
 
   private async onUpdate(sessionId: string, update: SessionUpdate, paramsMeta?: unknown): Promise<void> {
@@ -914,9 +939,14 @@ export class AcpClient extends EventEmitter<AcpEvents> {
    */
   private async answerElicitation(req: ElicitationRequest): Promise<ElicitationResponse> {
     if (req.mode !== 'form') {
-      throw new AcpError(
+      // ★ A `RequestError`, not our own `AcpError`: the SDK turns an unrecognised throw from a
+      // handler into `-32603 Internal error` and buries the original inside
+      // `data.details`. The spec wants `-32602 Invalid params` here, and the shipped client
+      // (and this repo's smoke test) branch on the code — so the error has to be the type the
+      // SDK understands. Measured: the first attempt answered -32603 and scenario 6 failed.
+      throw RequestError.invalidParams(
+        undefined,
         `only form elicitation is supported (mode=${req.mode === undefined ? 'undefined' : String(req.mode)})`,
-        -32602,
       );
     }
     if (!this.elicitationHandler) return { action: 'cancel' };
