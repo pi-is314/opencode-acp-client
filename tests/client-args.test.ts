@@ -1,8 +1,9 @@
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { parseArgs, clientArgs, findExecutable, resumeCommand, isolatedTuiRoots, resolveSessionId, epilogueSessionId, firstResolvableSessionId, epilogueLine, epilogueWordmark, newestContinueEntry, printHelp } from '../src/index.js';
 
@@ -407,10 +408,10 @@ describe('TUI state isolation from a native opencode install', () => {
   it('isolates the state/data roots and hardens the db and self-updating', () => {
     const env = withEnv({}, () => isolatedTuiRoots());
     expect(env).toBeDefined();
-    expect(env!['XDG_STATE_HOME']).toMatch(/\.opencode-acp-client\/opencode\/state$/);
-    expect(env!['XDG_DATA_HOME']).toMatch(/\.opencode-acp-client\/opencode\/data$/);
+    expect(env!['XDG_STATE_HOME']).toMatch(/\.opencode-acp-client[/\\]opencode[/\\]state$/);
+    expect(env!['XDG_DATA_HOME']).toMatch(/\.opencode-acp-client[/\\]opencode[/\\]data$/);
     // A second belt: the db file itself, in case an XDG root is ignored.
-    expect(env!['OPENCODE_DB']).toMatch(/\.opencode-acp-client\/opencode\/data\/opencode\.db$/);
+    expect(env!['OPENCODE_DB']).toMatch(/\.opencode-acp-client[/\\]opencode[/\\]data[/\\]opencode\.db$/);
     // Our TUI must not upgrade itself mid-run (a silent bump is what produced
     // the version-mismatch warnings), and two TUIs watching one worktree
     // duplicate file events.
@@ -432,8 +433,8 @@ describe('TUI state isolation from a native opencode install', () => {
     const b = withEnv({}, () =>
       isolatedTuiRoots({ command: '/usr/local/bin/dsh', args: ['--profile', 'acp'] }),
     );
-    expect(a!['XDG_STATE_HOME']).toMatch(/opencode\/opencode-acp-[0-9a-f]{8}\/state$/);
-    expect(b!['XDG_STATE_HOME']).toMatch(/opencode\/dsh-profile-acp-[0-9a-f]{8}\/state$/);
+    expect(a!['XDG_STATE_HOME']).toMatch(/opencode[/\\]opencode-acp-[0-9a-f]{8}[/\\]state$/);
+    expect(b!['XDG_STATE_HOME']).toMatch(/opencode[/\\]dsh-profile-acp-[0-9a-f]{8}[/\\]state$/);
     expect(a!['XDG_STATE_HOME']).not.toBe(b!['XDG_STATE_HOME']);
     // Same command = same root, so a restart keeps its own tabs.
     const again = withEnv({}, () =>
@@ -475,7 +476,7 @@ describe('TUI state isolation from a native opencode install', () => {
 
   it('optional private config root, and an explicit opt-out for a shared world', () => {
     const isolated = withEnv({ OPENCODE_ACP_CLIENT_ISOLATED_CONFIG: '1' }, () => isolatedTuiRoots());
-    expect(isolated!['OPENCODE_CONFIG_DIR']).toMatch(/\.opencode-acp-client\/opencode\/config-root$/);
+    expect(isolated!['OPENCODE_CONFIG_DIR']).toMatch(/\.opencode-acp-client[/\\]opencode[/\\]config-root$/);
     expect(withEnv({ OPENCODE_ACP_CLIENT_SHARED_STATE: '1' }, () => isolatedTuiRoots())).toBeUndefined();
   });
 });
@@ -586,10 +587,19 @@ describe('agent command preflight', () => {
     });
   });
 
+  // ★ Windows has no executable bit: `access(X_OK)` succeeds on any existing file, so a
+  // plain text file IS "runnable" there. The POSIX expectation is asserted on POSIX only;
+  // on Windows the same fixture asserts the thing that actually matters — a name that is
+  // not there resolves to nothing.
   it('rejects a file that is not executable', () => {
     withTempBin((dir) => {
       writeFileSync(join(dir, 'plain-file'), 'not a program\n');
-      expect(findExecutable('plain-file', { PATH: dir })).toBeUndefined();
+      if (process.platform === 'win32') {
+        expect(findExecutable('plain-file', { PATH: dir })).toBeDefined();
+        expect(findExecutable('no-such-file', { PATH: dir })).toBeUndefined();
+      } else {
+        expect(findExecutable('plain-file', { PATH: dir })).toBeUndefined();
+      }
     });
   });
 
@@ -659,6 +669,19 @@ describe('the exit wordmark', () => {
 });
 
 describe('the help output', () => {
+  // ★ `printHelp()` quotes the binary's OWN `--help`, so these assertions depend on a
+  // concrete answer. They used to depend on whatever `opencode` this machine happened to
+  // have — and CI's windows-latest has none, so three of them failed there for a reason
+  // that had nothing to do with the code under test. The fixture is the answer.
+  const realBin = process.env['OPENCODE_BIN'];
+  beforeAll(() => {
+    process.env['OPENCODE_BIN'] = fileURLToPath(new URL('./fake-opencode-tui.mjs', import.meta.url));
+  });
+  afterAll(() => {
+    if (realBin === undefined) delete process.env['OPENCODE_BIN'];
+    else process.env['OPENCODE_BIN'] = realBin;
+  });
+
   /** What `--help` would print, assembled the same way the command does. */
   const help = (): string => {
     const chunks: string[] = [];

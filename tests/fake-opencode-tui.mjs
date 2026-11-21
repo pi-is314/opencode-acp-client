@@ -21,6 +21,37 @@ if (process.argv.includes('--version')) {
   process.exit(0);
 }
 
+// `--help` too: `printHelp()` quotes the binary's own flag list, so a test that reads our
+// help needs a binary that answers it. Without this the help tests only passed on a machine
+// with opencode installed — and CI has none, so three of them failed there.
+if (process.argv.includes('--help')) {
+  process.stdout.write(`DESCRIPTION
+  OpenCode command line interface
+
+USAGE
+  opencode <subcommand> [flags] [<directory>]
+
+FLAGS
+  --standalone            Run with a private server instead of the background service
+  --server string         Connect to a server URL instead of the background service
+  --auto                  Auto-approve permissions that are not explicitly denied
+  --continue, -c          Continue the last session
+  --session, -s string    Session ID to continue
+  --prompt string         Prompt to use
+
+GLOBAL FLAGS
+  --help, -h              Show help information
+  --version, -v           Show version information
+  --print-logs            Print logs to stderr
+  --log-level <level>     Sets the minimum log level
+
+SUBCOMMANDS
+  upgrade, update    Upgrade OpenCode to the latest or a specific version
+  acp                Start an Agent Client Protocol server
+`);
+  process.exit(0);
+}
+
 if (process.env.FAKE_TUI_ARGS) {
   try {
     writeFileSync(process.env.FAKE_TUI_ARGS, JSON.stringify(process.argv.slice(2), null, 2));

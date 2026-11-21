@@ -954,7 +954,14 @@ export function findExecutable(
   // not against wherever we happened to be started — the agent is spawned with
   // the workspace directory as its cwd, so `tests/agent.mjs` means that file
   // inside the workspace.
-  if (command.includes('/')) {
+  // ★ A path is "contains a separator", and on Windows that is `\`, not `/` — plus a
+  // drive-absolute `C:\…` names its own location. Testing only for `/` treated
+  // `C:\hostedtoolcache\windows\node\22\x64\node.exe` as a COMMAND NAME, so it was
+  // looked up in PATH (where it is not) and the answer was `undefined` for a file that
+  // plainly exists. Measured on windows-latest in CI. `path.isAbsolute` covers the
+  // drive-letter form on both platforms it matters for.
+  const looksLikePath = command.includes('/') || command.includes('\\') || isAbsolute(command);
+  if (looksLikePath) {
     const target = isAbsolute(command) ? command : resolve(cwd, command);
     return executable(target) ? target : undefined;
   }

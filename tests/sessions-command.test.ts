@@ -111,7 +111,8 @@ describe('the sessions table', () => {
 });
 
 describe('the directory and agent filters', () => {
-  const home = process.env['HOME'] ?? '/Users/x';
+  // Windows sets USERPROFILE, not HOME (measured in CI).
+  const home = process.env['HOME'] ?? process.env['USERPROFILE'] ?? '/Users/x';
   const sessionDirectory = `${home}/projects/webapp`;
 
   it('accepts an absolute path, a ~ path, and a path relative to where we run', () => {

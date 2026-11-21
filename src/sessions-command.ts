@@ -11,7 +11,7 @@
  * `--limit`/`--offset` page it; `--json` gives the raw rows.
  */
 
-import { isAbsolute, resolve, sep } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 
 import { agentBindingLabel, SessionMap, type SessionMapEntry } from './session-map.js';
 
@@ -63,9 +63,17 @@ export function matchesDirectory(sessionDirectory: string | undefined, wanted: s
   if (!sessionDirectory) return false;
   const query = wanted.trim();
   if (!query) return true;
-  const home = process.env['HOME'];
-  const expand = (value: string): string =>
-    value === '~' ? (home ?? value) : value.startsWith('~/') && home ? `${home}${value.slice(1)}` : value;
+  // ★ `HOME` first, then Windows' `USERPROFILE` — measured in CI: windows-latest sets no
+  // `HOME`, so `~` never expanded there and `--directory ~/projects/webapp` compared
+  // literally. The trailing part is kept verbatim rather than sliced at a fixed index,
+  // because the separator after `~` is `\` on Windows.
+  const home = process.env['HOME'] ?? process.env['USERPROFILE'];
+  const expand = (value: string): string => {
+    if (!home) return value;
+    if (value === '~') return home;
+    if (/^~[/\\]/.test(value)) return `${home}${value.slice(1)}`;
+    return value;
+  };
 
   const asPath = expand(query);
   const absolute = isAbsolute(asPath) ? asPath : resolve(process.cwd(), asPath);
@@ -74,7 +82,7 @@ export function matchesDirectory(sessionDirectory: string | undefined, wanted: s
 
   // Not a path at all: a fragment. A query with a separator is a path and must not fall
   // through to substring matching — `--directory a/b` should not match `/x/a/bc`.
-  const looksLikePath = asPath.includes(sep) || asPath === '.' || asPath === '..';
+  const looksLikePath = /[/\\]/.test(asPath) || asPath === '.' || asPath === '..';
   if (looksLikePath) return false;
   return sessionDirectory.toLowerCase().includes(asPath.toLowerCase());
 }
