@@ -11,7 +11,7 @@
 import http from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { removeDirSync } from './remove-dir.js';
-import { dirname } from 'node:path';
+import { basename, dirname} from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,14 +39,32 @@ const SCRIPT_FILES: string[] = [];
  * file, quoted per platform.
  */
 function twoStageWrite(): string {
-  const script = join(tmpdir(), `oac-twostage-${process.pid}.mjs`);
+  const base = join(tmpdir(), `oac-twostage-${process.pid}`);
+  const script = `${base}.mjs`;
   writeFileSync(
     script,
     "process.stdout.write('first');\nsetTimeout(() => process.stdout.write('second'), 200);\n",
     'utf8',
   );
   SCRIPT_FILES.push(script);
-  return `"${process.execPath}" "${script}"`;
+  return runnable(base);
+}
+
+/**
+ * A command line that runs `<base>.mjs`, with the shell quoting kept out of it.
+ *
+ * The bridge runs `!command` through `cmd.exe` on Windows (`shell: true`). A quoted path inside
+ * that string loses its quotes and node then received a path it could not open — it exited 0
+ * and wrote **zero bytes**, twice, which is what kept two shell tests red through several
+ * attempts at the fixtures themselves. POSIX gets the quoting it needs, because `/bin/sh`
+ * honours it there; Windows gets a `.cmd` shim instead, so the command line carries no quotes.
+ */
+function runnable(base: string): string {
+  if (process.platform !== 'win32') return `"${process.execPath}" "${base}.mjs"`;
+  const shim = `${base}.cmd`;
+  writeFileSync(shim, `@echo off\r\n"${process.execPath}" "%~dp0${basename(base)}.mjs"\r\n`, 'utf8');
+  SCRIPT_FILES.push(shim);
+  return shim;
 }
 
 function writeBytes(bytes: number[]): string {
@@ -55,10 +73,15 @@ function writeBytes(bytes: number[]): string {
   // wrote nothing — measured in CI, where the poll never saw a byte and the test failed for a
   // quoting accident. The path is quoted per platform and holds no spaces (tmpdir), and the
   // script is removed when the suite exits.
-  const script = join(tmpdir(), `oac-write-${process.pid}-${bytes.join('_')}.mjs`);
+  // ★ Windows: the command runs through `cmd.exe` (the bridge spawns with `shell: true`), and
+  // a quoted path in that string does not survive — measured in CI: `exit=0` with **0 bytes**,
+  // twice, for the same script. So the runnable is a `.cmd` wrapper holding the quoting, and
+  // the command line names only that file (which lives in tmpdir and has no spaces).
+  const base = join(tmpdir(), `oac-write-${process.pid}-${bytes.join('_')}`);
+  const script = `${base}.mjs`;
   writeFileSync(script, `process.stdout.write(Buffer.from([${bytes.join(',')}]));\n`, 'utf8');
   SCRIPT_FILES.push(script);
-  return `"${process.execPath}" "${script}"`;
+  return runnable(base);
 }
 
 
