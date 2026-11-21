@@ -1849,7 +1849,10 @@ describe('the skill attachment path', () => {
       // ★ The base directory is checked by its tail, not its whole path: on Windows the
       // temp directory arrives in its 8.3 short form (`RUNNER~1`), so the value the bridge
       // reports and the `home` this test holds are the same directory spelled two ways.
-      expect(text).toContain(`Base directory for this skill: ${skillDir}`);
+      // ★ Both sides through `realpath` before comparing: on Windows the same directory has
+      // a short (8.3) and a long spelling, and the bridge reports whichever one its own cwd
+      // string carried. `realpathSync.native` canonicalises both to the long form.
+      expect(text).toContain(`Base directory for this skill: ${realpathSync.native(skillDir)}`);
     } finally {
       deferredRemovals.push(join(process.cwd(), '.opencode'));
       deferredRemovals.push(home);
@@ -1920,9 +1923,10 @@ describe('the /cd move', () => {
     // comes back in its 8.3 short form (`C:\Users\RUNNER~1\…` while `target` is the long
     // one), so an exact match failed there for a correct answer. The name is the part this
     // asserts — that the turn ran in the directory /cd moved to.
-    const dirName = (p: string): string => p.split(/[/\\]/).filter(Boolean).pop() ?? p;
     expect(text).toContain(`cwd: `);
-    expect(text).toContain(dirName(target));
+    // ★ The same directory, possibly spelled short (`RUNNER~1`) on one side and long on the
+    // other; `realpathSync.native` canonicalises both.
+    expect(text).toContain(realpathSync.native(target));
   });
 
   it('keeps the replayed config after a restart, so the catalog is not wiped empty', async () => {
@@ -2525,7 +2529,18 @@ describe('the shell the TUI runs with !command', () => {
       await fetch(`${url}/api/shell`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ command: { command: "printf 'é🙂x'" } }),
+        // ★ `printf` does not exist in cmd.exe, so on Windows the shell produced nothing and
+        // `size` stayed 0 — the test then failed on its very first wait, for a missing
+        // utility rather than for the byte arithmetic it is about. `node -e` is present
+        // wherever this suite runs, and writes the same bytes without a shell builtin.
+        body: JSON.stringify({
+          command: {
+            command:
+              process.platform === 'win32'
+                ? 'node -e "process.stdout.write(Buffer.from([0xc3,0xa9,0xf0,0x9f,0x99,0x82,0x78]))"'
+                : "printf 'é🙂x'",
+          },
+        }),
       })
     ).json()) as { data: { id: string } };
     const shellId = started.data.id;
