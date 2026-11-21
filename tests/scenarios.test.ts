@@ -15,12 +15,14 @@ import { dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 
 import { BridgeServer, derivedTitle, markTitle, projectIdFor } from '../src/server.js';
 import { resolveSessionId } from '../src/index.js';
 
 const FAKE_AGENT = fileURLToPath(new URL('./fake-acp-agent.mjs', import.meta.url));
+/** Helper scripts `writeBytes` creates; removed when the suite exits. */
+const SCRIPT_FILES: string[] = [];
 
 /**
  * A shell command that writes `text` with no trailing newline, on any platform.
@@ -30,11 +32,33 @@ const FAKE_AGENT = fileURLToPath(new URL('./fake-acp-agent.mjs', import.meta.url
  * exercise. `node -e` is guaranteed — the suite itself runs on it — and the bytes are written
  * directly so the UTF-8 case is exact.
  */
+/**
+ * A command that writes `first`, waits, then writes `second` — the paged-output fixture.
+ *
+ * Same quoting hazard as `writeBytes`: the code cannot ride on the command line. It is a script
+ * file, quoted per platform.
+ */
+function twoStageWrite(): string {
+  const script = join(tmpdir(), `oac-twostage-${process.pid}.mjs`);
+  writeFileSync(
+    script,
+    "process.stdout.write('first');\nsetTimeout(() => process.stdout.write('second'), 200);\n",
+    'utf8',
+  );
+  SCRIPT_FILES.push(script);
+  return `"${process.execPath}" "${script}"`;
+}
+
 function writeBytes(bytes: number[]): string {
-  const list = bytes.join(',');
-  return process.platform === 'win32'
-    ? `node -e "process.stdout.write(Buffer.from([${list}]))"`
-    : `node -e 'process.stdout.write(Buffer.from([${list}]))'`;
+  // ★ A script FILE, not `node -e '<code>'`: the shell the bridge spawns is cmd.exe on
+  // Windows, which strips the quotes that keep the code together, so the command failed and
+  // wrote nothing — measured in CI, where the poll never saw a byte and the test failed for a
+  // quoting accident. The path is quoted per platform and holds no spaces (tmpdir), and the
+  // script is removed when the suite exits.
+  const script = join(tmpdir(), `oac-write-${process.pid}-${bytes.join('_')}.mjs`);
+  writeFileSync(script, `process.stdout.write(Buffer.from([${bytes.join(',')}]));\n`, 'utf8');
+  SCRIPT_FILES.push(script);
+  return `"${process.execPath}" "${script}"`;
 }
 
 
@@ -89,6 +113,16 @@ async function start(scenario: string, extra: Record<string, string> = {}): Prom
   const { host, port } = await server.listen();
   return `http://${host}:${port}`;
 }
+
+afterAll(() => {
+  for (const file of SCRIPT_FILES.splice(0)) {
+    try {
+      rmSync(file, { force: true });
+    } catch {
+      /* best effort */
+    }
+  }
+});
 
 afterEach(async () => {
   while (servers.length) await servers.pop()?.close();
@@ -2537,9 +2571,9 @@ describe('the shell the TUI runs with !command', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           command: {
-            // `printf` and `sleep` are POSIX; `node` is guaranteed wherever the suite runs.
-            // The same two writes straddle a short wait without any shell builtin.
-            command: `node -e "${'setTimeout(()=>process.stdout.write(process.argv[1]),200);process.stdout.write(process.argv[2])'}" second first`,
+            // `printf` and `sleep` are POSIX, and `node -e '<code>'` loses its quotes to
+            // cmd.exe — so this is a script FILE too, for the same reason as `writeBytes`.
+            command: twoStageWrite(),
           },
         }),
       })
