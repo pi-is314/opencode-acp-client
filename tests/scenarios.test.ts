@@ -10,6 +10,7 @@
  */
 import http from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { removeDirSync } from './remove-dir.js';
 import { dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -35,26 +36,6 @@ async function startLaunched(scenario: string, extra: Record<string, string> = {
   const server = servers[servers.length - 1]!;
   await server.waitForCatalog(5_000);
   return url;
-}
-
-/**
- * Remove a temp directory, retrying while Windows still holds it.
- *
- * ★ On Windows a directory stays locked for a moment after the process that used it as its
- * cwd exits, so an immediate recursive removal answers `EBUSY`. That failed whole tests
- * AFTER they had passed — the assertion was fine, the cleanup threw. `force` already makes
- * "not there" harmless; this only adds patience.
- */
-async function removeDir(dir: string): Promise<void> {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      rmSync(dir, { recursive: true, force: true });
-      return;
-    } catch (err) {
-      if (attempt >= 5) throw err;
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
-  }
 }
 
 async function start(scenario: string, extra: Record<string, string> = {}): Promise<string> {
@@ -1019,7 +1000,7 @@ describe('a title the agent announces', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      await removeDir(dir);
+      removeDirSync(dir);
     }
   });
 });
@@ -1110,7 +1091,7 @@ describe('concurrent turns on one connection', () => {
       expect(heldText).toContain('concurrent-ok');
       expect(JSON.stringify(await messages(url, free))).toBe(freeText);
     } finally {
-      await removeDir(dir);
+      removeDirSync(dir);
     }
   });
 });
@@ -1187,7 +1168,7 @@ describe('a follow-up sent while a turn runs (the TUI sends delivery: steer)', (
       expect(text).toContain('follow up');
       expect(text).toContain('queued-reply');
     } finally {
-      await removeDir(dir);
+      removeDirSync(dir);
     }
   });
 });
@@ -1417,7 +1398,7 @@ describe('the title a restored tab shows', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      await removeDir(dir);
+      removeDirSync(dir);
     }
   });
 });
@@ -1609,7 +1590,7 @@ describe('a restore that succeeds teaches the session map', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      await removeDir(dir);
+      removeDirSync(dir);
     }
   });
 });
@@ -2338,7 +2319,7 @@ describe('what the bridge writes to disk', () => {
       if (previousXdg === undefined) delete process.env['XDG_STATE_HOME'];
       else process.env['XDG_STATE_HOME'] = previousXdg;
       if (previousDir !== undefined) process.env['OPENCODE_ACP_CLIENT_TITLE_REQUESTS'] = previousDir;
-      await removeDir(state);
+      removeDirSync(state);
     }
   });
 });
@@ -2450,7 +2431,7 @@ describe('the workspace a session belongs to', () => {
       expect(line).toBeDefined();
       expect(line).toContain(asked);
     } finally {
-      await removeDir(asked);
+      removeDirSync(asked);
     }
   });
 });
@@ -2872,7 +2853,7 @@ describe('the workspace a session runs in', () => {
       expect(bareLine).toBeDefined();
       expect(bareLine).toContain(`in ${process.cwd()}`);
     } finally {
-      await removeDir(named);
+      removeDirSync(named);
     }
   });
 });
@@ -3133,7 +3114,7 @@ describe('a fresh conversation is one session, not two', () => {
     } finally {
       if (previousMap === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previousMap;
-      await removeDir(dir);
+      removeDirSync(dir);
     }
   });
 });
@@ -3171,7 +3152,7 @@ describe('a session remembers which agent created it', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      await removeDir(dir);
+      removeDirSync(dir);
     }
   };
 
@@ -3308,7 +3289,7 @@ describe('hydrating several remembered tabs at once', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      await removeDir(dir);
+      removeDirSync(dir);
     }
   });
 
@@ -3379,7 +3360,7 @@ describe('hydrating several remembered tabs at once', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      await removeDir(dir);
+      removeDirSync(dir);
     }
   });
 });
@@ -3453,7 +3434,7 @@ describe('a new tab after a restored tab from another agent', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      await removeDir(dir);
+      removeDirSync(dir);
     }
   });
 });
@@ -3499,7 +3480,7 @@ describe('adopting a remembered session whose directory is spelled differently',
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      await removeDir(dir);
+      removeDirSync(dir);
     }
   });
 });
@@ -3615,7 +3596,7 @@ describe('the fallback title from the first message', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      await removeDir(dir);
+      removeDirSync(dir);
     }
   });
 
@@ -3659,7 +3640,7 @@ describe('the fallback title from the first message', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      await removeDir(dir);
+      removeDirSync(dir);
     }
   });
 
@@ -3883,7 +3864,7 @@ describe('the session map, the one file the bridge writes', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      rmSync(dirname(mapPath), { recursive: true, force: true });
+      removeDirSync(dirname(mapPath));
     }
   });
 });
@@ -3941,7 +3922,7 @@ describe('a transcript rebuilt by an ACP replay', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      rmSync(dirname(mapPath), { recursive: true, force: true });
+      removeDirSync(dirname(mapPath));
     }
   });
 });
@@ -3979,7 +3960,7 @@ describe('the session map file', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      rmSync(dirname(mapPath), { recursive: true, force: true });
+      removeDirSync(dirname(mapPath));
     }
   });
 });

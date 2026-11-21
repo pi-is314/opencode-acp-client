@@ -1,4 +1,5 @@
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { removeDirSync } from './remove-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -31,7 +32,7 @@ describe('the daemon registry', () => {
   afterEach(() => {
     if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_DAEMONS'];
     else process.env['OPENCODE_ACP_CLIENT_DAEMONS'] = previous;
-    rmSync(dir, { recursive: true, force: true });
+    removeDirSync(dir);
   });
 
   it('records this process as alive and forgets it on shutdown', () => {
