@@ -183,7 +183,7 @@ pnpm e2e:dsh-acp # = bash scripts/e2e-dsh-acp.sh  ★ full acceptance against a 
                   #   `-s` resume (no replay). Archives the agent's test sessions; deliberately not in the gate.
 ```
 
-- **Test state (measured on this machine): 26 files / 402 passed / ★ 0 skipped.**
+- **Test state (measured on this machine): 28 files / 430 passed / ★ 0 skipped.**
   The README's status table is **hand-written**, so remember to sync it when you change the tests.
 - ★ **Do not introduce skips again.** The 6 skips that once existed were all in `tests/server.test.ts`: under vitest, reading SSE
   through **`fetch` buffers**, so the read never returns. **The fix is to switch to `node:http`** (a real socket), not to mark them skipped ✗ —
@@ -216,6 +216,14 @@ pnpm e2e:dsh-acp # = bash scripts/e2e-dsh-acp.sh  ★ full acceptance against a 
   `rawInput`/`rawOutput` are declared equivalent; elsewhere an omitted field means unchanged). Zed
   models it as `MaybeUndefined::{Undefined, Null, Value}` (`acp/terminal_updates.rs`,
   `patch_preserves_omission_and_null`) — do the same and paste the JSON an agent would send.
+- ★ **Every frame is validated against the official schema** (`tests/acp-schema.test.ts`). Behavioural
+  tests prove the bridge does what it intends; they say nothing about whether what it sends is legal —
+  a misspelled field (schema wants `configId`, we send `configOptions`) passes every behavioural
+  assertion and fails at the first real agent. `session/set_model` cost a day that way. The schema is
+  the one the ACP project publishes (`agentclientprotocol/typescript-sdk`, `schema/v1/schema.json`),
+  **vendored into `tests/fixtures/acp-schema/`** so the suite needs no network; the `meta.v1.json`
+  beside it lists every method of the protocol, which also lets us assert that we only name methods
+  that exist.
 - Before committing: `pnpm typecheck && pnpm test`; if you touched the HTTP/ACP surface, run `pnpm verify` as well (or at least `bash scripts/e2e-smoke.sh`).
 - ★ **Match the gate to the change's size — never run it mechanically**:
   - **Small changes** (copy, comments, a single assertion, minor script fixes):

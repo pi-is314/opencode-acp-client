@@ -174,7 +174,7 @@ pnpm e2e:dsh-acp # = bash scripts/e2e-dsh-acp.sh  ★ 真 agent 全功能验收�
                   #   跑完自动归档 dsh 的测试会话；不在总闸里（需要真 agent，见 e2e-real-agent 的同类约定）
 ```
 
-- **测试现状（本机实测）：26 文件 / 402 passed / ★ 0 skipped。**
+- **测试现状（本机实测）：28 文件 / 430 passed / ★ 0 skipped。**
   README 的状态表是**手写的**，改动测试时记得同步它。
 - ★ **不要引入 skip，也不要用 `fetch` 读 SSE。** vitest 下 `fetch` 会缓冲，读永远不返回；
   **用 `node:http`**（真 socket）。两个连带的事实：① 订阅是异步建立的，先 `openStream` 后立刻动作会丢掉最早的事件
@@ -202,6 +202,12 @@ pnpm e2e:dsh-acp # = bash scripts/e2e-dsh-acp.sh  ★ 真 agent 全功能验收�
   `rawInput`/`rawOutput` 两者等价；其它字段缺省=不变）。Zed 为此建了
   `MaybeUndefined::{Undefined, Null, Value}`（`acp/terminal_updates.rs` 的
   `patch_preserves_omission_and_null`），照它办：把 agent 会发出的那段 JSON 原样贴进测试。
+- ★ **每一帧都对着官方 schema 校验**（`tests/acp-schema.test.ts`）。行为单测证明的是"桥按预期动"，
+  说不出"发出去的东西合规" —— 一个字段名写错（schema 要 `configId`，我们发 `configOptions`）
+  能过掉所有行为断言，到真 agent 那儿才炸；`session/set_model` 就是这么烧掉一天的。
+  用的是 ACP 项目自己发布的 schema（`agentclientprotocol/typescript-sdk` 的
+  `schema/v1/schema.json`），**vendored 进 `tests/fixtures/acp-schema/`**，测试不联网；
+  同目录的 `meta.v1.json` 带完整方法清单，所以"我们只调用存在的方法"也能一起断言。
 - 提交前：`pnpm typecheck && pnpm test`；动了 HTTP/ACP 面再跑 `pnpm verify`（或至少 `bash scripts/e2e-smoke.sh`）。
 - ★ **门控跑多全，按改动规模定，别机械全跑**：
   - **小改动**（文案、注释、个别断言、脚本小修）：`pnpm typecheck && pnpm test` 即可，**不跑完整 `pnpm verify`**——
