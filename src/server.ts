@@ -3437,6 +3437,11 @@ export class BridgeServer {
     };
     child.stdout?.on('data', append);
     child.stderr?.on('data', append);
+    // TEMPORARY DIAGNOSTIC (to be removed): why did a Windows shell run produce nothing?
+    child.on('error', (err) => this.log(`[bridge] shell ${id}: spawn error ${String(err)}`));
+    child.on('exit', (code, signal) => {
+      this.log(`[bridge] shell ${id}: exit code=${code} signal=${signal} bytes=${record.output.length}`);
+    });
     child.on('error', (err) => {
       record.output += `${err.message}\n`;
       this.finishShell(record, 'exited');
