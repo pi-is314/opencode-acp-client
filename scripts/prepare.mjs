@@ -16,6 +16,7 @@
  */
 import { chmodSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
 
 const root = process.cwd();
 const run = (command, args, options = {}) =>
@@ -39,8 +40,20 @@ if (!existsSync('node_modules/typescript')) {
 
 // 4. Build. `tsc` writes the file; the executable bit is POSIX-only, and Node's own `chmod`
 //    is a no-op on Windows, so this needs no platform branch.
-const build = run('npx', ['tsc', '-p', 'tsconfig.json']);
-if (build.status !== 0) process.exit(build.status ?? 1);
+// `npx` on Windows is `npx.cmd`, which `spawn(cmd, {shell: false})` cannot run — and in CI it
+// resolved to nothing at all, failing the step with exit 1 and no visible reason. Run the
+// compiler the same way Node runs anything else: through the current interpreter and the
+// local bin shim, whose path is known regardless of platform or PATH ordering.
+const tsc = join(root, 'node_modules', 'typescript', 'bin', 'tsc');
+if (!existsSync(tsc)) {
+  console.error('[prepare] typescript is missing from node_modules; run the install again');
+  process.exit(1);
+}
+const build = spawnSync(process.execPath, [tsc, '-p', 'tsconfig.json'], { cwd: root, stdio: 'inherit' });
+if (build.status !== 0) {
+  console.error(`[prepare] the build failed (exit ${build.status ?? '?'}); see the output above`);
+  process.exit(build.status ?? 1);
+}
 try {
   chmodSync('dist/index.js', 0o755);
 } catch {
