@@ -43,7 +43,7 @@
     "e2e:epilogue": "bash scripts/e2e-epilogue.sh",
     "e2e:dsh-acp": "bash scripts/e2e-dsh-acp.sh",
     "prepack": "pnpm build",
-    "prepare": "git config core.hooksPath .githooks 2>/dev/null || true; node -e \"process.exit(require('fs').existsSync('dist/index.js')?0:1)\" || npm install --no-save --no-audit --no-fund typescript @types/node >/dev/null 2>&1 && tsc -p tsconfig.json && chmod +x dist/index.js"
+    "prepare": "node scripts/prepare.mjs"
   },
   "engines": {
     "node": ">=20"

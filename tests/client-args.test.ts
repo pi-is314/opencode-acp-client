@@ -673,13 +673,29 @@ describe('the help output', () => {
   // concrete answer. They used to depend on whatever `opencode` this machine happened to
   // have — and CI's windows-latest has none, so three of them failed there for a reason
   // that had nothing to do with the code under test. The fixture is the answer.
+  // ★ The fixture is a `.mjs`. A shebang script is executable on POSIX and NOT on Windows,
+  // where launching one directly fails with ENOENT — and `printHelp()` turns that into an
+  // empty forwarded list, so the three tests below failed there for a reason that had
+  // nothing to do with what they assert. A generated shim (`opencode` / `opencode.cmd`)
+  // that invokes `node` explicitly runs on both.
   const realBin = process.env['OPENCODE_BIN'];
+  const shimDir = mkdtempSync(join(tmpdir(), 'oac-ocbin-'));
+  const shim = join(shimDir, process.platform === 'win32' ? 'opencode.cmd' : 'opencode');
   beforeAll(() => {
-    process.env['OPENCODE_BIN'] = fileURLToPath(new URL('./fake-opencode-tui.mjs', import.meta.url));
+    const fixture = fileURLToPath(new URL('./fake-opencode-tui.mjs', import.meta.url));
+    writeFileSync(
+      shim,
+      process.platform === 'win32'
+        ? `@echo off\r\n"${process.execPath}" "${fixture}" %*\r\n`
+        : `#!/bin/sh\nexec "${process.execPath}" "${fixture}" "$@"\n`,
+      { mode: 0o755 },
+    );
+    process.env['OPENCODE_BIN'] = shim;
   });
   afterAll(() => {
     if (realBin === undefined) delete process.env['OPENCODE_BIN'];
     else process.env['OPENCODE_BIN'] = realBin;
+    rmSync(shimDir, { recursive: true, force: true });
   });
 
   /** What `--help` would print, assembled the same way the command does. */

@@ -9,19 +9,27 @@ name: windows
 # `taskkill /T` instead) and the path/quoting assumptions elsewhere are POSIX in
 # spirit. A green Unix run says nothing about those.
 #
-# ★ NOT on push or pull_request yet. The first real run of this job (2026-11-21, on a
-# fresh repository) failed 10 of 402 tests, and the failures are real Windows defects in
-# the product, not just in the tests — `/cd` does not move a session, `!command`'s
-# cursor paging mis-handles the shell, and the workspace directory resolution differs.
-# Two were fixed on the way (`findExecutable` treated `C:\…\node.exe` as a command
-# NAME and looked it up in PATH; `matchesDirectory` read only `HOME`, which Windows
-# does not set). The rest are open work.
+# ★ It runs on every push and pull request now. It spent a while as `workflow_dispatch`
+# only, because its first real run failed 10 of 402 tests and the fixes were done against a
+# Windows 11 VM rather than through CI: a permanently red job is one nobody reads, which is
+# how a genuine regression slips through later.
 #
-# Firing on every push keeps `main` permanently red, and a permanently red workflow is
-# one nobody reads — which is how a real regression slips through later. Run it by hand
-# (`gh workflow run windows.yml`) while chipping away at the list; restore `push` and
-# `pull_request` in the same commit that makes it green.
+# What that VM found, all of it real (the tests were fine — the assumptions were POSIX):
+#
+#   • `spawn(..., {detached: true})` delivers NO output through pipes on Windows, so every
+#     `!command` was blank there. `detached` is POSIX-only now; `windowsKillArgs` already
+#     handles the process tree with `taskkill /T`.
+#   • the `prepare` script was a shell one-liner using `2>/dev/null` and `chmod`, neither of
+#     which exists there — `pnpm install` failed outright, so nobody on Windows could install
+#     from source. It is `scripts/prepare.mjs` now.
+#   • `printHelp()` launched `opencode` with `execFileSync`, which cannot start a `.cmd`
+#     (how npm installs it) and does not survive CRLF.
+#   • temp directories are locked by a live agent child, so cleanup has to happen after the
+#     server closes, not in a test's `finally`.
+#   • `os.homedir()` reads `USERPROFILE` there, and `printf` does not exist.
 on:
+  push:
+  pull_request:
   workflow_dispatch:
 
 permissions:

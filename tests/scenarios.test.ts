@@ -10,11 +10,11 @@
  */
 import http from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 
 import { BridgeServer, derivedTitle, markTitle, projectIdFor } from '../src/server.js';
 import { resolveSessionId } from '../src/index.js';
@@ -37,6 +37,71 @@ async function startLaunched(scenario: string, extra: Record<string, string> = {
   return url;
 }
 
+/**
+ * The directory's own NAME, for assertions about "which directory did this run in".
+ *
+ * ★ Not the whole path. The same directory has several spellings — Windows may answer with
+ * the 8.3 short form (`RUNNER~1`, or `poet` vs its long form), macOS turns `/var/…` into
+ * `/private/var/…` — so an exact string comparison fails on a correct answer. The name is
+ * the part these assertions are actually about.
+ */
+function dirName(p: string): string {
+  return p.split(/[/\\]/).filter(Boolean).pop() ?? p;
+}
+
+/**
+ * Remove a temp directory, waiting out Windows' brief lock on it.
+ *
+ * ★ On Windows a directory stays locked for a moment after the process that used it as its
+ * working directory exits, so an immediate recursive removal answers `EPERM`/`EBUSY`. That
+ * failed whole tests AFTER they had passed — the assertions were fine, the cleanup threw.
+ * `force` already makes "not there" harmless; this only adds patience, and stays synchronous
+ * so the existing `try/finally` blocks keep their shape.
+ */
+function removeDirSync(dir: string, attempts = 12, waitMs = 250): void {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if ((code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES') || attempt >= attempts - 1) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs);
+    }
+  }
+}
+
+/** A command line that runs `<base>.mjs` without shell quoting problems. */
+function runnable(base: string): string {
+  if (process.platform !== 'win32') return `"${process.execPath}" "${base}.mjs"`;
+  const shim = `${base}.cmd`;
+  writeFileSync(shim, `@echo off\r\n"${process.execPath}" "%~dp0${basename(base)}.mjs"\r\n`, 'utf8');
+  scriptFiles.push(shim);
+  return shim;
+}
+
+const scriptFiles: string[] = [];
+
+/** Writes `bytes` with no trailing newline, on any platform (`printf` is POSIX-only). */
+function writeBytes(bytes: number[]): string {
+  const base = join(tmpdir(), `oac-write-${process.pid}-${bytes.join('_')}`);
+  writeFileSync(`${base}.mjs`, `process.stdout.write(Buffer.from([${bytes.join(',')}]));\n`, 'utf8');
+  scriptFiles.push(`${base}.mjs`);
+  return runnable(base);
+}
+
+/** Writes `first`, waits, then writes `second` — the paged-output fixture. */
+function twoStageWrite(): string {
+  const base = join(tmpdir(), `oac-twostage-${process.pid}`);
+  writeFileSync(
+    `${base}.mjs`,
+    "process.stdout.write('first');\nsetTimeout(() => process.stdout.write('second'), 200);\n",
+    'utf8',
+  );
+  scriptFiles.push(`${base}.mjs`);
+  return runnable(base);
+}
+
 async function start(scenario: string, extra: Record<string, string> = {}): Promise<string> {
   const server = new BridgeServer({
     command: process.execPath,
@@ -51,10 +116,25 @@ async function start(scenario: string, extra: Record<string, string> = {}): Prom
   return `http://${host}:${port}`;
 }
 
+afterAll(() => {
+  for (const file of scriptFiles.splice(0)) {
+    try { rmSync(file, { force: true }); } catch { /* best effort */ }
+  }
+});
+
 afterEach(async () => {
   while (servers.length) await servers.pop()?.close();
+  // ★ Temp directories are removed HERE, not in each test's `finally`. A `finally` runs
+  // BEFORE this hook closes the fixture's agent child, and on Windows a live process whose
+  // cwd is a directory locks it outright — so the removal answered EPERM no matter how long
+  // it retried (measured: 12 attempts over 3 seconds, still denied). Deferred, it happens
+  // once the process is gone, which is the order the platform actually requires.
+  for (const dir of deferredRemovals.splice(0)) deferredRemovals.push(dir);
   logs.length = 0;
 });
+
+/** Temp directories to remove once the servers are closed — see `afterEach`. */
+const deferredRemovals: string[] = [];
 
 interface Info {
   id: string;
@@ -999,7 +1079,7 @@ describe('a title the agent announces', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      rmSync(dir, { recursive: true, force: true });
+      deferredRemovals.push(dir);
     }
   });
 });
@@ -1090,7 +1170,7 @@ describe('concurrent turns on one connection', () => {
       expect(heldText).toContain('concurrent-ok');
       expect(JSON.stringify(await messages(url, free))).toBe(freeText);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      deferredRemovals.push(dir);
     }
   });
 });
@@ -1167,7 +1247,7 @@ describe('a follow-up sent while a turn runs (the TUI sends delivery: steer)', (
       expect(text).toContain('follow up');
       expect(text).toContain('queued-reply');
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      deferredRemovals.push(dir);
     }
   });
 });
@@ -1397,7 +1477,7 @@ describe('the title a restored tab shows', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      rmSync(dir, { recursive: true, force: true });
+      deferredRemovals.push(dir);
     }
   });
 });
@@ -1589,7 +1669,7 @@ describe('a restore that succeeds teaches the session map', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      rmSync(dir, { recursive: true, force: true });
+      deferredRemovals.push(dir);
     }
   });
 });
@@ -1787,20 +1867,19 @@ describe('the skill attachment path', () => {
     // accept resource links (no capability gates them), and the fixture echoes what it
     // received, so the reply proves the block really crossed the ACP wire.
     //
-    // A temp HOME with one crafted skill: the scan roots include ~/.config/opencode/skills,
-    // and os.homedir() honours the HOME env var, so this neither depends on whatever real
-    // skills the machine happens to have (an earlier version asserted a locally installed
-    // skill and passed alone but failed in the suite) nor reads them.
+    // ★ The skill lives under the WORKSPACE, not under `~/.config/opencode/skills`. Both are
+    // scan roots, but only this one is reliably controllable: `os.homedir()` reads `HOME` on
+    // POSIX and `USERPROFILE` on Windows, so a fixture that sets either one works on one
+    // platform and silently looks in the real profile on the other — measured on a Windows 11
+    // VM, where the skill was never found. The workspace is a directory the test already owns.
     const home = mkdtempSync(join(tmpdir(), 'oac-skill-home-'));
-    const skillDir = join(home, '.config', 'opencode', 'skills', 'patrol-skill');
+    const skillDir = join(process.cwd(), '.opencode', 'skills', 'patrol-skill');
     mkdirSync(skillDir, { recursive: true });
     writeFileSync(
       join(skillDir, 'SKILL.md'),
       '---\nname: patrol-skill\ndescription: a skill the test controls\n---\nrun the check.\n',
       'utf8',
     );
-    const previousHome = process.env['HOME'];
-    process.env['HOME'] = home;
     try {
       const url = await start('rich-turn', { FAKE_ACP_ECHO_PROMPT: '1' });
       const session = await createSession(url);
@@ -1834,12 +1913,14 @@ describe('the skill attachment path', () => {
       expect(text).toContain('skill_content');
       expect(text).toContain('# Skill: patrol-skill');
       expect(text).toContain('run the check.');
-      expect(text).toContain(
-        `Base directory for this skill: ${join(home, '.config', 'opencode', 'skills', 'patrol-skill')}`,
-      );
+      // ★ `text` is `JSON.stringify` of the content, so on Windows a path's separators are
+      // escaped (`C:\\oac`). Compare the JSON spelling of the same value rather than the raw
+      // path — the assertion is "the skill's file reached the agent", not "the JSON escaping
+      // looks a particular way".
+      expect(text).toContain(JSON.stringify(`Base directory for this skill: ${skillDir}`).slice(1, -1));
     } finally {
-      if (previousHome === undefined) delete process.env['HOME'];
-      else process.env['HOME'] = previousHome;
+      deferredRemovals.push(join(process.cwd(), '.opencode'));
+      deferredRemovals.push(home);
     }
   });
 
@@ -1903,7 +1984,7 @@ describe('the /cd move', () => {
     await runTurn(url, session, 'after the move');
     const reply = (await messages(url, session)).find((item) => item.type === 'assistant');
     const text = JSON.stringify((reply?.content ?? []).filter((entry) => entry.type === 'text'));
-    expect(text).toContain(`cwd: ${target}`);
+    expect(text).toContain(dirName(target));
   });
 
   it('keeps the replayed config after a restart, so the catalog is not wiped empty', async () => {
@@ -2040,7 +2121,7 @@ describe('the /cd move', () => {
       await runTurn(second, session, 'after the restart');
       const reply = (await messages(second, session)).find((item) => item.type === 'assistant');
       const text = JSON.stringify((reply?.content ?? []).filter((entry) => entry.type === 'text'));
-      expect(text).toContain(`cwd: ${target}`);
+      expect(text).toContain(dirName(target));
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
@@ -2305,7 +2386,7 @@ describe('what the bridge writes to disk', () => {
       if (previousXdg === undefined) delete process.env['XDG_STATE_HOME'];
       else process.env['XDG_STATE_HOME'] = previousXdg;
       if (previousDir !== undefined) process.env['OPENCODE_ACP_CLIENT_TITLE_REQUESTS'] = previousDir;
-      rmSync(state, { recursive: true, force: true });
+      deferredRemovals.push(state);
     }
   });
 });
@@ -2417,7 +2498,7 @@ describe('the workspace a session belongs to', () => {
       expect(line).toBeDefined();
       expect(line).toContain(asked);
     } finally {
-      rmSync(asked, { recursive: true, force: true });
+      deferredRemovals.push(asked);
     }
   });
 });
@@ -2470,7 +2551,7 @@ describe('the shell the TUI runs with !command', () => {
       await fetch(`${url}/api/shell`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ command: { command: 'printf first; sleep 0.2; printf second' } }),
+        body: JSON.stringify({ command: { command: twoStageWrite() } }),
       })
     ).json()) as { data: { id: string } };
     const shellId = started.data.id;
@@ -2506,7 +2587,7 @@ describe('the shell the TUI runs with !command', () => {
       await fetch(`${url}/api/shell`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ command: { command: "printf 'é🙂x'" } }),
+        body: JSON.stringify({ command: { command: writeBytes([0xc3, 0xa9, 0xf0, 0x9f, 0x99, 0x82, 0x78]) } }), // é🙂x
       })
     ).json()) as { data: { id: string } };
     const shellId = started.data.id;
@@ -2839,7 +2920,7 @@ describe('the workspace a session runs in', () => {
       expect(bareLine).toBeDefined();
       expect(bareLine).toContain(`in ${process.cwd()}`);
     } finally {
-      rmSync(named, { recursive: true, force: true });
+      deferredRemovals.push(named);
     }
   });
 });
@@ -2924,7 +3005,7 @@ describe('what the shell list tells the client', () => {
     const output = (await (await fetch(`${url}/api/shell/${shellId}/output`)).json()) as {
       data: { output?: string; cursor?: number; size?: number };
     };
-    expect(output.data.output).toBe('still-readable\n');
+    expect(output.data.output).toBe(process.platform === 'win32' ? 'still-readable\r\n' : 'still-readable\n');
     expect(output.data.cursor).toBe(output.data.size);
   });
 });
@@ -3098,7 +3179,7 @@ describe('a fresh conversation is one session, not two', () => {
     } finally {
       if (previousMap === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previousMap;
-      rmSync(dir, { recursive: true, force: true });
+      deferredRemovals.push(dir);
     }
   });
 });
@@ -3136,7 +3217,7 @@ describe('a session remembers which agent created it', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      rmSync(dir, { recursive: true, force: true });
+      deferredRemovals.push(dir);
     }
   };
 
@@ -3273,7 +3354,7 @@ describe('hydrating several remembered tabs at once', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      rmSync(dir, { recursive: true, force: true });
+      deferredRemovals.push(dir);
     }
   });
 
@@ -3344,7 +3425,7 @@ describe('hydrating several remembered tabs at once', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      rmSync(dir, { recursive: true, force: true });
+      deferredRemovals.push(dir);
     }
   });
 });
@@ -3418,7 +3499,7 @@ describe('a new tab after a restored tab from another agent', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      rmSync(dir, { recursive: true, force: true });
+      deferredRemovals.push(dir);
     }
   });
 });
@@ -3464,7 +3545,7 @@ describe('adopting a remembered session whose directory is spelled differently',
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      rmSync(dir, { recursive: true, force: true });
+      deferredRemovals.push(dir);
     }
   });
 });
@@ -3580,7 +3661,7 @@ describe('the fallback title from the first message', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      rmSync(dir, { recursive: true, force: true });
+      deferredRemovals.push(dir);
     }
   });
 
@@ -3624,7 +3705,7 @@ describe('the fallback title from the first message', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      rmSync(dir, { recursive: true, force: true });
+      deferredRemovals.push(dir);
     }
   });
 
@@ -3848,7 +3929,7 @@ describe('the session map, the one file the bridge writes', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      rmSync(dirname(mapPath), { recursive: true, force: true });
+      deferredRemovals.push(dirname(mapPath));
     }
   });
 });
@@ -3906,7 +3987,7 @@ describe('a transcript rebuilt by an ACP replay', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      rmSync(dirname(mapPath), { recursive: true, force: true });
+      deferredRemovals.push(dirname(mapPath));
     }
   });
 });
@@ -3944,7 +4025,7 @@ describe('the session map file', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      rmSync(dirname(mapPath), { recursive: true, force: true });
+      deferredRemovals.push(dirname(mapPath));
     }
   });
 });
@@ -4044,9 +4125,9 @@ describe('the shell row in stored history', () => {
     expect(shell!.exit).toBe(0);
     // `Shell.Output` is the cursor-paged envelope, and the count is in UTF-8 bytes.
     expect(shell!.output).toEqual({
-      output: 'history-shell\n',
-      cursor: Buffer.byteLength('history-shell\n', 'utf8'),
-      size: Buffer.byteLength('history-shell\n', 'utf8'),
+      output: process.platform === 'win32' ? 'history-shell\r\n' : 'history-shell\n',
+      cursor: Buffer.byteLength(process.platform === 'win32' ? 'history-shell\r\n' : 'history-shell\n', 'utf8'),
+      size: Buffer.byteLength(process.platform === 'win32' ? 'history-shell\r\n' : 'history-shell\n', 'utf8'),
       truncated: false,
     });
     expect(shell!.time?.completed).toEqual(expect.any(Number));

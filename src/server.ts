@@ -3413,7 +3413,14 @@ export class BridgeServer {
       // Its own process group. `shell: true` means the direct child is a shell,
       // so killing the pid alone leaves whatever it spawned (`!sleep 300`)
       // running with no parent — an orphan when the bridge exits.
-      detached: true,
+      //
+      // ★ POSIX only. On Windows `detached` puts the child in a new process group AND
+      // detaches it from the console, and the pipes then deliver NOTHING: measured on a
+      // Windows 11 VM, `spawn(cmd, {shell: true, detached: true})` exits 0 with an empty
+      // stdout while the same call with `detached: false` returns the output. The whole
+      // `!command` surface was blank there for that reason. `windowsKillArgs` already
+      // handles the tree with `taskkill /T`, so this flag buys nothing on Windows anyway.
+      detached: process.platform !== 'win32',
     });
     const record: ShellRun = {
       sessionID: sessionId,
