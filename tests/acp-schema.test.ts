@@ -14,13 +14,23 @@
  * check that we only ever name methods that exist.
  */
 import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { createRequire } from 'node:module';
 
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { describe, expect, it } from 'vitest';
 
-const SCHEMA_DIR = new URL('./fixtures/acp-schema/', import.meta.url);
-const schema = JSON.parse(readFileSync(new URL('schema.v1.json', SCHEMA_DIR), 'utf8')) as Record<string, unknown>;
-const meta = JSON.parse(readFileSync(new URL('meta.v1.json', SCHEMA_DIR), 'utf8')) as {
+const require = createRequire(import.meta.url);
+
+// ★ Read from the installed SDK, not a vendored copy. The copy existed because the SDK was
+// not a dependency; it is one now, so the schema follows whatever version is installed and
+// cannot silently drift from the SDK the runtime actually uses. `require.resolve` is used
+// because the package maps these files through `exports`, which `readFileSync` cannot see.
+const SCHEMA_DIR = dirname(require.resolve('@agentclientprotocol/sdk/schema/v1/schema.json'));
+const schema = JSON.parse(readFileSync(join(SCHEMA_DIR, 'schema.json'), 'utf8')) as Record<string, unknown>;
+// The method inventory is NOT in the schema (there `method` is a plain string), so it stays a
+// vendored copy — 1 KB, from the protocol release, not from the SDK.
+const meta = JSON.parse(readFileSync(new URL('method-inventory.v1.json', import.meta.url), 'utf8')) as {
   version: number;
   agentMethods: Record<string, string>;
   clientMethods: Record<string, string>;

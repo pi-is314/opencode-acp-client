@@ -20,6 +20,8 @@ import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
+import { Readable, Writable } from 'node:stream';
+import { client as sdkClient, ndJsonStream, type ClientConnection, type Stream } from '@agentclientprotocol/sdk';
 
 import {
   CLIENT_CAPABILITIES,
@@ -93,6 +95,22 @@ export class AcpError extends Error {
 }
 
 /** The agent does not implement the method we called. */
+/**
+ * Turn an SDK `RequestError` into the vocabulary this repo's callers branch on.
+ *
+ * The codes come from the wire unchanged (`-32601` unknown method is how an agent says
+ * "not supported"), so the mapping is about the *class*, not the payload: a missing
+ * method becomes `AcpMethodNotFound`, everything else an `AcpError` carrying the agent's
+ * own code and message.
+ */
+export function translateSdkError(method: string, err: unknown): AcpError {
+  if (err instanceof AcpError) return err;
+  const code = (err as { code?: unknown }).code;
+  const message = err instanceof Error ? err.message : String(err);
+  if (code === -32601 || /unknown method/i.test(message)) return new AcpMethodNotFound(method);
+  return new AcpError(message, typeof code === 'number' ? code : 'acp-error');
+}
+
 export class AcpMethodNotFound extends AcpError {
   constructor(method: string) {
     super(`agent does not implement ${method}`, -32601);
@@ -100,21 +118,19 @@ export class AcpMethodNotFound extends AcpError {
   }
 }
 
-interface Pending {
-  resolve: (value: unknown) => void;
-  reject: (err: Error) => void;
-  timer?: NodeJS.Timeout;
-  method: string;
-}
+
+/** Variants seen on the wire that this client does not know (logged once each). */
+const UNKNOWN_UPDATES_SEEN = new Set<string>();
 
 export class AcpClient extends EventEmitter<AcpEvents> {
   private readonly child: ChildProcessWithoutNullStreams;
-  private readonly pending = new Map<number | string, Pending>();
   private readonly timeoutMs: number;
   private readonly promptTimeoutMs: number;
   private readonly protocolVersion: number;
   private nextId = 1;
   private buffer = '';
+  /** The SDK's connection: it owns JSON-RPC correlation and the transport. */
+  private conn: ClientConnection | null = null;
   private closed = false;
   private caps: EffectiveCapabilities | null = null;
   private agentVersion: string | undefined;
@@ -161,13 +177,54 @@ export class AcpClient extends EventEmitter<AcpEvents> {
       detached: process.platform !== 'win32',
     });
 
-    this.child.stdout.setEncoding('utf8');
     // ★ `onLog` was declared, passed by two call sites, and never consumed — the event was
     // the only real sink. The practical cost: the session-discovery client in
     // `src/server.ts` passed `onLog` and its ACP frames were dropped on the floor, so a failed
     // discovery explained nothing. Wired here so the option means what its name says.
     if (options.onLog) this.on('log', (line: string) => options.onLog?.(line));
-    this.child.stdout.on('data', (chunk: string) => this.onStdout(chunk));
+    // ★ The SDK owns the transport now. `ndJsonStream` splits NDJSON on BYTES with the
+    // SDK's own `LineBuffer` (incremental, with a frame-size cap), and the connection below
+    // owns JSON-RPC correlation. `onStdout` is kept for the frame recorder only: recording
+    // wants the raw frames verbatim, which a decoded connection no longer exposes.
+    this.conn = sdkClient()
+      .onRequest('session/request_permission', async (context) =>
+        this.answerPermission((context.params ?? {}) as RequestPermissionRequest),
+      )
+      // The SDK's generated `CreateElicitationResponse` is a stricter nominal type than the
+      // protocol needs; ours carries exactly the same two fields (`action`, `content`) and
+      // is what the rest of this repo speaks, so the cast is at the boundary and nowhere else.
+      .onRequest('elicitation/create', async (context) =>
+        (await this.answerElicitation((context.params ?? {}) as ElicitationRequest)) as never,
+      )
+      // ★ Iron rule 3 ("never degrade silently") needs a catch-all: the SDK dispatches
+      // `session/update` to our typed handler, and an update whose `sessionUpdate` value we
+      // do not know would be dropped without a word. This records anything the specific
+      // handlers did not claim, so a new variant shows up in the log instead of on a blank
+      // screen.
+      .onNotification('*', async (context) => {
+        const method = (context as { method?: string }).method;
+        if (method === 'session/update') return; // handled below
+        this.emit('log', `[acp] notification ${String(method ?? '(unknown)')} has no handler`);
+      })
+      .onNotification('session/update', async (context) => {
+        const params = (context.params ?? {}) as { sessionId?: string; update?: unknown; _meta?: unknown };
+        if (typeof params.sessionId !== 'string' || params.update === undefined) return;
+        const variant = (params.update as { sessionUpdate?: unknown }).sessionUpdate;
+        if (typeof variant !== 'string') {
+          this.emit('log', '[acp] session/update without a sessionUpdate discriminator; ignored');
+          return;
+        }
+        await this.onUpdate(params.sessionId, params.update as SessionUpdate, params._meta);
+      })
+      .connect(
+        this.traced(
+          ndJsonStream(
+            Writable.toWeb(this.child.stdin) as WritableStream<Uint8Array>,
+            Readable.toWeb(this.child.stdout) as ReadableStream<Uint8Array>,
+          ),
+        ),
+      );
+
 
     this.child.stderr.setEncoding('utf8');
     this.child.stderr.on('data', (chunk: string) => {
@@ -177,11 +234,11 @@ export class AcpClient extends EventEmitter<AcpEvents> {
     });
 
     this.child.on('error', (err) => {
-      this.failAll(new AcpError(`failed to start agent: ${err.message}`, 'spawn-failed'));
+      this.emit('log', `[acp] failed to start the agent: ${err.message}`);
     });
     this.child.on('exit', (code, signal) => {
       this.closed = true;
-      this.failAll(new AcpError(`agent exited (code=${code} signal=${signal})`, 'agent-exited'));
+
       this.emit('exit', { code, signal });
     });
   }
@@ -552,7 +609,10 @@ export class AcpClient extends EventEmitter<AcpEvents> {
 
   /** `session/cancel` is a notification: fire and forget, per the spec. */
   cancel(sessionId: string): void {
-    this.notify('session/cancel', { sessionId });
+    // Fire and forget, per the spec: `session/cancel` is a notification. The SDK's
+    // `notify` never rejects for a transport error (there is nobody to answer), so the
+    // `void` here is the whole error story.
+    void this.conn?.agent.notify('session/cancel', { sessionId }).catch(() => undefined);
   }
 
   /** Terminate the agent. Safe to call repeatedly. */
@@ -589,7 +649,6 @@ export class AcpClient extends EventEmitter<AcpEvents> {
   async dispose(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    this.failAll(new AcpError('client disposed', 'disposed'));
     try {
       this.child.stdin.end();
     } catch {
@@ -620,25 +679,6 @@ export class AcpClient extends EventEmitter<AcpEvents> {
   }
 
   // ---------------------------------------------------------------- internals
-
-  private onStdout(chunk: string): void {
-    this.buffer += chunk;
-    let index: number;
-    while ((index = this.buffer.indexOf('\n')) >= 0) {
-      const line = this.buffer.slice(0, index).trim();
-      this.buffer = this.buffer.slice(index + 1);
-      if (!line) continue;
-      let msg: JsonRpcMessage;
-      try {
-        msg = JSON.parse(line) as JsonRpcMessage;
-      } catch {
-        this.emit('log', `[agent] unparseable frame: ${line.slice(0, 200)}`);
-        continue;
-      }
-      this.recordFrame(msg);
-      void this.onMessage(msg);
-    }
-  }
 
   /**
    * `OPENCODE_ACP_CLIENT_RECORD_FRAMES=<dir>`: append every inbound frame to
@@ -694,35 +734,6 @@ export class AcpClient extends EventEmitter<AcpEvents> {
     }
   }
 
-  private async onMessage(msg: JsonRpcMessage): Promise<void> {
-    // Raw frame tracing: the only way to tell "the agent sent nothing" apart
-    // from "we dropped what it sent".
-    if (process.env.OPENCODE_ACP_CLIENT_TRACE) {
-      this.emit('log', `[recv] ${JSON.stringify(msg).slice(0, 4000)}`);
-    }
-    if ('method' in msg && msg.method) {
-      if ('id' in msg && msg.id !== undefined) {
-        await this.onRequest(msg.id, msg.method, msg.params);
-      } else {
-        this.onNotification(msg.method, msg.params);
-      }
-      return;
-    }
-    const response = msg as { id: number | string; result?: unknown; error?: Pending extends never ? never : { code: number; message: string } };
-    const pending = this.pending.get(response.id);
-    if (!pending) {
-      this.emit('log', `[agent] response for unknown id ${String(response.id)}`);
-      return;
-    }
-    this.pending.delete(response.id);
-    clearTimeout(pending.timer);
-    if (response.error) {
-      pending.reject(new AcpError(response.error.message, response.error.code));
-    } else {
-      pending.resolve(response.result);
-    }
-  }
-
   private onNotification(method: string, params: unknown): void {
     if (method === 'session/update') {
       const p = (params ?? {}) as { sessionId?: string; update?: SessionUpdate };
@@ -763,66 +774,153 @@ export class AcpClient extends EventEmitter<AcpEvents> {
     this.emit('log', `[agent] notification ${method}`);
   }
 
-  /**
-   * Agent→client request. This is where "answer everything" matters most:
-   * an unhandled request is a deadlock, and a *silently* unhandled one is the
-   * hardest class of bug to find later.
+    /**
+   * One ACP request, with the clock this repo insists on.
+   *
+   * The JSON-RPC correlation itself is the SDK's (`conn.agent.request`): it owns the id
+   * map, the send queue, `$/cancel_request` and the frame limits, all of which used to be
+   * hand-written here. What stays ours is the part that is a *product* decision:
+   *
+   *  • **the timeout** — an agent that never answers must not hang a request forever.
+   *    Expressed through the SDK's `cancellationSignal` + `stopWaitingOnCancel`, which
+   *    additionally tells the agent we gave up (a `$/cancel_request`) instead of leaving
+   *    it working on something nobody is listening for anymore;
+   *  • **the error vocabulary** — callers branch on `AcpError`/`AcpMethodNotFound`, so an
+   *    SDK `RequestError` is translated rather than leaked.
    */
-  private async onRequest(id: number | string, method: string, params: unknown): Promise<void> {
-    try {
-      if (method === 'session/request_permission') {
-        const req = (params ?? {}) as RequestPermissionRequest;
-        if (!this.permissionHandler) {
-          // Nobody is listening. Answer with an explicit cancel so the agent can
-          // fail closed rather than wait forever.
-          this.respond(id, { outcome: { outcome: 'cancelled' } });
-          return;
-        }
-        const answer = await this.permissionHandler(req);
-        this.respond(id, answer);
-        return;
-      }
-
-      if (method === 'elicitation/create') {
-        const req = (params ?? {}) as ElicitationRequest;
-        // Checked before the handler: we advertise `form` only, and a url request
-        // must be refused rather than answered with a form (the spec forbids that
-        // fallback precisely because url mode carries the sensitive flows).
-        if (req.mode !== 'form') {
-          this.respondError(
-            id,
-            -32602,
-            `only form elicitation is supported (mode=${req.mode === undefined ? 'undefined' : String(req.mode)})`,
+  /**
+   * One ACP request, with the clock this repo insists on.
+   *
+   * The JSON-RPC correlation itself is the SDK's (`conn.agent.request`): it owns the id
+   * map, the send queue, `$/cancel_request` handling and the frame limits, all of which
+   * used to be hand-written here. What stays ours is the part that is a *product*
+   * decision:
+   *
+   *  • **the timeout** — an agent that never answers must not hang a request forever,
+   *    and we must tell it we gave up rather than leave it working for nobody. That is
+   *    the SDK's `cancellationSignal` + `stopWaitingOnCancel`: the signal's abort reason
+   *    is what the promise rejects with, so it carries our own `AcpError('timeout')`;
+   *  • **the error vocabulary** — callers branch on `AcpError`/`AcpMethodNotFound`, so
+   *    an SDK `RequestError` is translated here rather than leaking out.
+   *
+   * `timeoutMs === null` and `0` both mean "no clock" (`session/prompt`'s default).
+   */
+  /**
+   * The SDK stream with `_TRACE` and frame recording wrapped around it.
+   *
+   * The SDK owns reading and writing, so this is the only place between our code and the
+   * wire — and it is a message-level seam, which is better than the byte-level one this
+   * used to be: a frame is recorded exactly as the connection saw it, and the trace cannot
+   * disagree with what was actually exchanged. Taps are pass-through and never await
+   * anything the connection depends on, so a slow log cannot stall the protocol.
+   */
+  private traced(inner: Stream): Stream {
+    const trace = Boolean(process.env.OPENCODE_ACP_CLIENT_TRACE);
+    // `WritableStream` has no `pipeThrough`; a `TransformStream` is the pair that does.
+    // The reader side tees into the recorder, the writer side only traces.
+    const inbound = new TransformStream<unknown, unknown>({
+      transform: (msg, controller) => {
+        // ★ This sits on the RAW inbound stream, BEFORE the SDK's schema validation — which
+        // is the only place an unknown `sessionUpdate` value can still be seen. The SDK
+        // validates each notification against the generated schema and drops what does not
+        // match, so a variant it predates never reaches our handler; iron rule 3 says that
+        // must not happen silently. Note it here, then let the SDK do what it does.
+        const update = (msg as { params?: { update?: { sessionUpdate?: unknown } } })?.params?.update;
+        if (update && typeof update === 'object' && !AcpClient.KNOWN_UPDATES.has(String(update.sessionUpdate))) {
+          this.emit(
+            'log',
+            `[acp] unknown session/update variant '${String(update.sessionUpdate)}'; the SDK will drop it`,
           );
-          return;
+          UNKNOWN_UPDATES_SEEN.add(String(update.sessionUpdate));
         }
-        if (!this.elicitationHandler) {
-          // Fail closed, not silent: `cancel` is one of the three documented
-          // outcomes, and the agent is required to cope with it.
-          this.respond(id, { action: 'cancel' });
-          return;
-        }
-        this.respond(id, await this.elicitationHandler(req));
-        return;
-      }
+        if (trace) this.emit('log', `[recv] ${JSON.stringify(msg).slice(0, 4000)}`);
+        this.recordFrame(msg as JsonRpcMessage);
+        controller.enqueue(msg);
+      },
+    });
+    const outbound = new TransformStream<unknown, unknown>({
+      transform: (msg, controller) => {
+        if (trace) this.emit('log', `[send] ${JSON.stringify(msg).slice(0, 4000)}`);
+        controller.enqueue(msg);
+      },
+    });
+    void inner.readable.pipeTo(inbound.writable).catch(() => undefined);
+    void outbound.readable.pipeTo(inner.writable).catch(() => undefined);
+    return { readable: inbound.readable, writable: outbound.writable } as Stream;
+  }
 
-      const support = clientCallbackSupport(method);
-      if (!support.supported) {
-        // Explicit refusal beats silence: the agent can degrade.
-        this.respondError(id, -32601, support.reason);
-        return;
-      }
+  /**
+   * One `session/update`, dispatched through the SDK's notification handler.
+   *
+   * Two details ride along that the SDK does not know about:
+   *
+   *  • **config state is recorded here, not by a listener.** The translator only attaches on
+   *    the first prompt, so an agent that announces new options between `session/new` and
+   *    that point would otherwise be silently ignored (and its model change lost);
+   *  • **`_meta` is merged from both places it can sit** — the notification params and the
+   *    update itself — without overwriting the agent's own keys.
+   */
+  /** The variants this client knows about; anything else is logged, never dropped silently. */
+  static readonly KNOWN_UPDATES = new Set<string>([
+    'agent_message_chunk',
+    'agent_thought_chunk',
+    'user_message_chunk',
+    'tool_call',
+    'tool_call_update',
+    'plan',
+    'available_commands_update',
+    'current_mode_update',
+    'config_option_update',
+    'session_info_update',
+    'usage_update',
+    'notice',
+    'compaction_update',
+    'compaction_summary_chunk',
+    'subagent_update',
+  ]);
 
-      this.respondError(id, -32601, `bridge does not handle ${method}`);
-    } catch (err) {
-      // An `AcpError` carries a deliberate code (e.g. -32602 for a schema we
-      // cannot render); anything else is an internal failure.
-      if (err instanceof AcpError && typeof err.code === 'number') {
-        this.respondError(id, err.code, err.message);
-        return;
-      }
-      this.respondError(id, -32603, err instanceof Error ? err.message : String(err));
+  private async onUpdate(sessionId: string, update: SessionUpdate, paramsMeta?: unknown): Promise<void> {
+    // ★ Iron rule 3. The SDK's generated type lists the variants that exist TODAY; an agent
+    // running a newer (or its own) revision can send one we have never heard of, and the
+    // type cannot stop that at runtime. Say so in the log — the alternative is a silent
+    // drop, which is the failure mode this repo is built against.
+    if (update.sessionUpdate === 'config_option_update') {
+      this.applyConfigOptions(sessionId, update['configOptions'] as SessionConfigOption[] | undefined);
     }
+    const updateMeta = update['_meta'];
+    const meta = {
+      ...(paramsMeta && typeof paramsMeta === 'object' ? (paramsMeta as Record<string, unknown>) : {}),
+      ...(updateMeta && typeof updateMeta === 'object' ? (updateMeta as Record<string, unknown>) : {}),
+    };
+    this.emit('update', sessionId, Object.keys(meta).length > 0 ? { ...update, _meta: meta } : update);
+  }
+
+  /**
+   * `session/request_permission`, moved behind the SDK's handler.
+   *
+   * The rule this repo is strictest about survives the move: **an answer always goes
+   * back**. With no handler registered the agent is told `cancelled` rather than being
+   * left to wait forever, and a handler that throws still produces a JSON-RPC error
+   * instead of silence.
+   */
+  private async answerPermission(req: RequestPermissionRequest): Promise<RequestPermissionResponse> {
+    if (!this.permissionHandler) return { outcome: { outcome: 'cancelled' } };
+    return this.permissionHandler(req);
+  }
+
+  /**
+   * `elicitation/create`. Only `mode: "form"` is advertised, and the spec forbids
+   * answering a `url` request with a form — so that is refused rather than faked.
+   */
+  private async answerElicitation(req: ElicitationRequest): Promise<ElicitationResponse> {
+    if (req.mode !== 'form') {
+      throw new AcpError(
+        `only form elicitation is supported (mode=${req.mode === undefined ? 'undefined' : String(req.mode)})`,
+        -32602,
+      );
+    }
+    if (!this.elicitationHandler) return { action: 'cancel' };
+    return this.elicitationHandler(req);
   }
 
   private request<T>(
@@ -830,64 +928,29 @@ export class AcpClient extends EventEmitter<AcpEvents> {
     params: unknown,
     timeoutMs: number | null = this.timeoutMs,
   ): Promise<T> {
-    if (this.closed) {
-      return Promise.reject(new AcpError('agent is not running', 'agent-exited'));
-    }
-    const id = this.nextId++;
-    return new Promise<T>((resolve, reject) => {
-      const timer =
-        timeoutMs === null
-          ? undefined
-          : setTimeout(() => {
-              this.pending.delete(id);
-              reject(new AcpError(`timed out waiting for ${method}`, 'timeout'));
-            }, timeoutMs);
-      timer?.unref?.();
-      this.pending.set(id, {
-        method,
-        timer,
-        resolve: resolve as (value: unknown) => void,
-        reject,
+    const conn = this.conn;
+    if (!conn) return Promise.reject(new AcpError('agent is not running', 'agent-exited'));
+
+    const send = (signal?: AbortSignal): Promise<T> =>
+      (async () =>
+        (await conn.agent.request(method, params, {
+          ...(signal ? { cancellationSignal: signal, stopWaitingOnCancel: true } : {}),
+        })) as T)().catch((err: unknown) => {
+        // A timeout aborts with our own error; that is the answer, not the SDK's.
+        const reason = signal?.aborted ? signal.reason : undefined;
+        throw reason instanceof AcpError ? reason : translateSdkError(method, err);
       });
-      this.write({ jsonrpc: '2.0', id, method, params });
-    });
+
+    if (timeoutMs === null || timeoutMs <= 0) return send();
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort(new AcpError(`timed out waiting for ${method}`, 'timeout'));
+    }, timeoutMs);
+    timer.unref?.();
+    return send(controller.signal).finally(() => clearTimeout(timer));
   }
 
-  private notify(method: string, params: unknown): void {
-    this.write({ jsonrpc: '2.0', method, params });
-  }
-
-  private respond(id: number | string, result: unknown): void {
-    this.write({ jsonrpc: '2.0', id, result });
-  }
-
-  private respondError(id: number | string, code: number, message: string): void {
-    this.write({ jsonrpc: '2.0', id, error: { code, message } });
-  }
-
-  private write(message: unknown): void {
-    if (this.closed) return;
-    // ★ The outbound half of the trace. `_TRACE` used to log only `[recv]`, so debugging a
-    // disagreement with an agent showed what it said and nothing about what we asked — which
-    // is how a bad request shape (a `configOptions` where the schema wants `configId`) looked
-    // like a misbehaving agent. Truncated like the inbound side: the frames are long.
-    if (process.env.OPENCODE_ACP_CLIENT_TRACE) {
-      this.emit('log', `[send] ${JSON.stringify(message).slice(0, 4000)}`);
-    }
-    try {
-      this.child.stdin.write(`${JSON.stringify(message)}\n`);
-    } catch (err) {
-      this.emit('log', `failed to write to agent: ${String(err)}`);
-    }
-  }
-
-  private failAll(err: Error): void {
-    for (const [id, pending] of this.pending) {
-      clearTimeout(pending.timer);
-      pending.reject(err);
-      this.pending.delete(id);
-    }
-  }
 }
 
 /**
