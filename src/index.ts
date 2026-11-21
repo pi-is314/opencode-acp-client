@@ -27,7 +27,7 @@
  * there is no flag for it.
  */
 
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { accessSync, constants, createWriteStream, mkdtempSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -834,10 +834,23 @@ export function printHelp(): void {
     // `.split('\n')` then leaves a `\r` on every line, so `/^(FLAGS|GLOBAL FLAGS)$/m`
     // never matches and the whole forwarded table comes out empty — the flag list was
     // simply missing from `--help` there. Measured on windows-latest.
-    const raw = execFileSync(binary.path, ['--help'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).replace(/\r\n/g, '\n');
+    // ★ Windows cannot exec a `.cmd`/`.bat` without a shell, and that is how npm installs
+    // `opencode` there — `execFileSync` answered ENOENT, which the `catch` below turned into
+    // an empty forwarded flag list, so `--help` silently lost that whole section. `cmd /c`
+    // is named explicitly rather than `shell: true`, because the latter re-parses the whole
+    // line and would break a path containing spaces the moment `--help` were ever joined in.
+    // `windowsVerbatimArguments` keeps `/c` from re-quoting the string cmd.exe receives;
+    // without it a path containing spaces is mangled. `spawnSync` is used because
+    // `execFileSync`'s typings do not carry that option.
+    const run = process.platform === 'win32'
+      ? spawnSync('cmd.exe', ['/d', '/s', '/c', `""${binary.path}" --help"`], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          windowsVerbatimArguments: true,
+        })
+      : spawnSync(binary.path, ['--help'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    if (run.error) throw run.error;
+    const raw = String(run.stdout ?? '').replace(/\r\n/g, '\n');
     const cut = raw.search(/^SUBCOMMANDS\s*$/m);
     const body = cut >= 0 ? raw.slice(0, cut) : raw;
     const firstHeading = body.search(/^(FLAGS|GLOBAL FLAGS)\s*$/m);
