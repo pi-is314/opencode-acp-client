@@ -21,6 +21,42 @@ import { BridgeServer, derivedTitle, markTitle, projectIdFor } from '../src/serv
 import { resolveSessionId } from '../src/index.js';
 
 const FAKE_AGENT = fileURLToPath(new URL('./fake-acp-agent.mjs', import.meta.url));
+
+/**
+ * A shell command that writes `text` with no trailing newline, on any platform.
+ *
+ * `printf` is POSIX-only: cmd.exe answers "not recognized" and produces no output, which made
+ * the shell tests fail on Windows for a missing utility rather than for the behaviour they
+ * exercise. `node -e` is guaranteed — the suite itself runs on it — and the bytes are written
+ * directly so the UTF-8 case is exact.
+ */
+function writeBytes(bytes: number[]): string {
+  const list = bytes.join(',');
+  return process.platform === 'win32'
+    ? `node -e "process.stdout.write(Buffer.from([${list}]))"`
+    : `node -e 'process.stdout.write(Buffer.from([${list}]))'`;
+}
+
+
+/**
+ * The directory a path names, spelled one way, for comparisons across platforms.
+ *
+ * `realpath` covers two things a plain string comparison does not: macOS turns `/var/…` into
+ * `/private/var/…`, and Windows may answer with an 8.3 short name (`RUNNER~1`). Note that
+ * `.native` alone is NOT enough there — measured on windows-latest, it returned the short form
+ * unchanged, so both sides still disagreed. `realpathSync` (the JS implementation) expands the
+ * short name on Windows, which is what makes the comparison work.
+ */
+function sameDir(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    // A path that no longer exists cannot disagree about its spelling; compare as given.
+    return p;
+  }
+}
+
+
 /** Temp directories to remove once the servers are closed — see `afterEach`. */
 const deferredRemovals: string[] = [];
 
@@ -1852,7 +1888,7 @@ describe('the skill attachment path', () => {
       // ★ Both sides through `realpath` before comparing: on Windows the same directory has
       // a short (8.3) and a long spelling, and the bridge reports whichever one its own cwd
       // string carried. `realpathSync.native` canonicalises both to the long form.
-      expect(text).toContain(`Base directory for this skill: ${realpathSync.native(skillDir)}`);
+      expect(text).toContain(`Base directory for this skill: ${sameDir(skillDir)}`);
     } finally {
       deferredRemovals.push(join(process.cwd(), '.opencode'));
       deferredRemovals.push(home);
@@ -1932,7 +1968,7 @@ describe('the /cd move', () => {
     // match up to the closing quote and put the escapes back before comparing.
     const reported = /cwd: (.*?)\)/.exec(text)?.[1]?.replace(/\\\\/g, '\\');
     expect(reported, `no cwd in the reply: ${text.slice(0, 200)}`).toBeDefined();
-    expect(realpathSync.native(reported!)).toBe(realpathSync.native(target));
+    expect(sameDir(reported!)).toBe(sameDir(target));
   });
 
   it('keeps the replayed config after a restart, so the catalog is not wiped empty', async () => {
@@ -2499,7 +2535,13 @@ describe('the shell the TUI runs with !command', () => {
       await fetch(`${url}/api/shell`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ command: { command: 'printf first; sleep 0.2; printf second' } }),
+        body: JSON.stringify({
+          command: {
+            // `printf` and `sleep` are POSIX; `node` is guaranteed wherever the suite runs.
+            // The same two writes straddle a short wait without any shell builtin.
+            command: `node -e "${'setTimeout(()=>process.stdout.write(process.argv[1]),200);process.stdout.write(process.argv[2])'}" second first`,
+          },
+        }),
       })
     ).json()) as { data: { id: string } };
     const shellId = started.data.id;
@@ -2541,10 +2583,7 @@ describe('the shell the TUI runs with !command', () => {
         // wherever this suite runs, and writes the same bytes without a shell builtin.
         body: JSON.stringify({
           command: {
-            command:
-              process.platform === 'win32'
-                ? 'node -e "process.stdout.write(Buffer.from([0xc3,0xa9,0xf0,0x9f,0x99,0x82,0x78]))"'
-                : "printf 'é🙂x'",
+            command: writeBytes([0xc3, 0xa9, 0xf0, 0x9f, 0x99, 0x82, 0x78]), // é🙂x
           },
         }),
       })
