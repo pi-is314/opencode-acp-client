@@ -255,7 +255,7 @@ pnpm e2e:tui       # the REAL opencode v2 TUI in tmux, against a fake agent, dri
 ### What a green run proves — and what it does not
 
 `pnpm verify` is the gate, so before you read a green run as approval for your change,
-know what it actually covers. Green means: the types check; 430 unit cases pass (the ACP
+know what it actually covers. Green means: the types check; 432 unit cases pass (the ACP
 translation layer, the HTTP surface's shapes, the capability gate, the version policy,
 cancellation semantics, and the SSE flows); every route we implement answers the shape
 opencode v2's **published OpenAPI** describes (52 probes, with deliberate differences
