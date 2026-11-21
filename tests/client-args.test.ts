@@ -673,9 +673,22 @@ describe('the help output', () => {
   // concrete answer. They used to depend on whatever `opencode` this machine happened to
   // have — and CI's windows-latest has none, so three of them failed there for a reason
   // that had nothing to do with the code under test. The fixture is the answer.
+  // ★ The fixture is run through `node` explicitly. A `.mjs` with a shebang is executable on
+  // POSIX but NOT on Windows, where `execFileSync(path, ...)` on a script fails with ENOENT —
+  // which `printHelp()` swallows into an empty flag list, so these three tests failed there
+  // while passing everywhere else. A tiny wrapper makes the fixture runnable on both.
   const realBin = process.env['OPENCODE_BIN'];
+  const wrapper = join(mkdtempSync(join(tmpdir(), 'oac-ocbin-')), process.platform === 'win32' ? 'opencode.cmd' : 'opencode');
   beforeAll(() => {
-    process.env['OPENCODE_BIN'] = fileURLToPath(new URL('./fake-opencode-tui.mjs', import.meta.url));
+    const fixture = fileURLToPath(new URL('./fake-opencode-tui.mjs', import.meta.url));
+    writeFileSync(
+      wrapper,
+      process.platform === 'win32'
+        ? `@echo off\r\n"${process.execPath}" "${fixture}" %*\r\n`
+        : `#!/bin/sh\nexec "${process.execPath}" "${fixture}" "$@"\n`,
+      { mode: 0o755 },
+    );
+    process.env['OPENCODE_BIN'] = wrapper;
   });
   afterAll(() => {
     if (realBin === undefined) delete process.env['OPENCODE_BIN'];

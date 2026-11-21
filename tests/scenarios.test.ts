@@ -1799,8 +1799,13 @@ describe('the skill attachment path', () => {
       '---\nname: patrol-skill\ndescription: a skill the test controls\n---\nrun the check.\n',
       'utf8',
     );
+    // ★ `os.homedir()` reads `HOME` on POSIX but `USERPROFILE` on Windows, so setting only
+    // `HOME` left the scan looking in the real profile there and the skill was never found.
+    // Both are set (and both restored) so the fixture governs the lookup on either platform.
     const previousHome = process.env['HOME'];
+    const previousProfile = process.env['USERPROFILE'];
     process.env['HOME'] = home;
+    process.env['USERPROFILE'] = home;
     try {
       const url = await start('rich-turn', { FAKE_ACP_ECHO_PROMPT: '1' });
       const session = await createSession(url);
@@ -1840,6 +1845,8 @@ describe('the skill attachment path', () => {
     } finally {
       if (previousHome === undefined) delete process.env['HOME'];
       else process.env['HOME'] = previousHome;
+      if (previousProfile === undefined) delete process.env['USERPROFILE'];
+      else process.env['USERPROFILE'] = previousProfile;
     }
   });
 
@@ -1903,7 +1910,13 @@ describe('the /cd move', () => {
     await runTurn(url, session, 'after the move');
     const reply = (await messages(url, session)).find((item) => item.type === 'assistant');
     const text = JSON.stringify((reply?.content ?? []).filter((entry) => entry.type === 'text'));
-    expect(text).toContain(`cwd: ${target}`);
+    // ★ Compare the directory's own name, not the whole path. On Windows the temp directory
+    // comes back in its 8.3 short form (`C:\Users\RUNNER~1\…` while `target` is the long
+    // one), so an exact match failed there for a correct answer. The name is the part this
+    // asserts — that the turn ran in the directory /cd moved to.
+    const dirName = (p: string): string => p.split(/[/\\]/).filter(Boolean).pop() ?? p;
+    expect(text).toContain(`cwd: `);
+    expect(text).toContain(dirName(target));
   });
 
   it('keeps the replayed config after a restart, so the catalog is not wiped empty', async () => {
@@ -2417,7 +2430,18 @@ describe('the workspace a session belongs to', () => {
       expect(line).toBeDefined();
       expect(line).toContain(asked);
     } finally {
-      rmSync(asked, { recursive: true, force: true });
+      // ★ Windows keeps a directory locked briefly after the process that had it as its cwd
+      // exits, so an immediate recursive removal answers EBUSY and fails the test AFTER it
+      // passed. Retried a few times instead; `force` already makes "not there" harmless.
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        try {
+          rmSync(asked, { recursive: true, force: true });
+          break;
+        } catch (err) {
+          if (attempt === 4) throw err;
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+      }
     }
   });
 });
@@ -2924,7 +2948,9 @@ describe('what the shell list tells the client', () => {
     const output = (await (await fetch(`${url}/api/shell/${shellId}/output`)).json()) as {
       data: { output?: string; cursor?: number; size?: number };
     };
-    expect(output.data.output).toBe('still-readable\n');
+    // ★ `echo` is the PLATFORM's echo: cmd.exe terminates with CRLF, not LF. Asserting the
+    // exact POSIX bytes made a correct capture look wrong on windows-latest.
+    expect(output.data.output).toBe(process.platform === 'win32' ? 'still-readable\r\n' : 'still-readable\n');
     expect(output.data.cursor).toBe(output.data.size);
   });
 });
@@ -4043,10 +4069,13 @@ describe('the shell row in stored history', () => {
     expect(shell!.status).toBe('exited');
     expect(shell!.exit).toBe(0);
     // `Shell.Output` is the cursor-paged envelope, and the count is in UTF-8 bytes.
+    // ★ The line ending is whatever the platform's own `echo` produced (CRLF on Windows);
+    // what this asserts is that cursor and size agree with the bytes actually captured.
+    const echoed = process.platform === 'win32' ? 'history-shell\r\n' : 'history-shell\n';
     expect(shell!.output).toEqual({
-      output: 'history-shell\n',
-      cursor: Buffer.byteLength('history-shell\n', 'utf8'),
-      size: Buffer.byteLength('history-shell\n', 'utf8'),
+      output: echoed,
+      cursor: Buffer.byteLength(echoed, 'utf8'),
+      size: Buffer.byteLength(echoed, 'utf8'),
       truncated: false,
     });
     expect(shell!.time?.completed).toEqual(expect.any(Number));

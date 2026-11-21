@@ -22,6 +22,10 @@ name: windows
 # (`gh workflow run windows.yml`) while chipping away at the list; restore `push` and
 # `pull_request` in the same commit that makes it green.
 on:
+  # ★ While `fix/windows-unit-tests` is open, this branch is where the nine known failures
+  # are being worked down — it needs to run on every push to that branch, and nowhere else.
+  push:
+    branches: ['fix/windows-unit-tests']
   workflow_dispatch:
 
 permissions:

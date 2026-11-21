@@ -830,7 +830,14 @@ export function printHelp(): void {
   let forwarded: Array<[string, string]> = [];
   try {
     const binary = resolveOpenCodeBinary();
-    const raw = execFileSync(binary.path, ['--help'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    // ★ Normalise the line endings first. opencode on Windows answers with CRLF, and
+    // `.split('\n')` then leaves a `\r` on every line, so `/^(FLAGS|GLOBAL FLAGS)$/m`
+    // never matches and the whole forwarded table comes out empty — the flag list was
+    // simply missing from `--help` there. Measured on windows-latest.
+    const raw = execFileSync(binary.path, ['--help'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).replace(/\r\n/g, '\n');
     const cut = raw.search(/^SUBCOMMANDS\s*$/m);
     const body = cut >= 0 ? raw.slice(0, cut) : raw;
     const firstHeading = body.search(/^(FLAGS|GLOBAL FLAGS)\s*$/m);
