@@ -1923,10 +1923,16 @@ describe('the /cd move', () => {
     // comes back in its 8.3 short form (`C:\Users\RUNNER~1\…` while `target` is the long
     // one), so an exact match failed there for a correct answer. The name is the part this
     // asserts — that the turn ran in the directory /cd moved to.
-    expect(text).toContain(`cwd: `);
-    // ★ The same directory, possibly spelled short (`RUNNER~1`) on one side and long on the
-    // other; `realpathSync.native` canonicalises both.
-    expect(text).toContain(realpathSync.native(target));
+    // ★ Compare the directory, not its spelling. The same path has several: Windows may hand
+    // back the 8.3 short form (`RUNNER~1`), and on macOS `/var` is a symlink to
+    // `/private/var` so the bridge's cwd and `mkdtempSync`'s answer differ by that prefix.
+    // Pulling the bridge's own `cwd: …` value out and canonicalising both sides compares what
+    // the assertion is about — that the turn ran in the directory /cd moved to.
+    // The reply is JSON, so a Windows path arrives with its separators escaped (`C:\\Users`);
+    // match up to the closing quote and put the escapes back before comparing.
+    const reported = /cwd: (.*?)\)/.exec(text)?.[1]?.replace(/\\\\/g, '\\');
+    expect(reported, `no cwd in the reply: ${text.slice(0, 200)}`).toBeDefined();
+    expect(realpathSync.native(reported!)).toBe(realpathSync.native(target));
   });
 
   it('keeps the replayed config after a restart, so the catalog is not wiped empty', async () => {
