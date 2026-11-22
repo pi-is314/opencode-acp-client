@@ -58,7 +58,38 @@ fi
 WORK="$(mktemp -d)"
 ART="$HERE/.artifacts/agent-matrix"
 mkdir -p "$ART"
-ONLY="${ONLY:-claude,codex,opencode,dsh,dsh-acp,qwen,gemini}"
+
+# ---------------------------------------------------------------- config isolation
+# ★ The TUI reads `~/.config/opencode/opencode.json` unless `OPENCODE_CONFIG_DIR` points
+# elsewhere. `e2e-real-tui.sh` has isolated it since docs/E2E-PITFALLS.md #8; this matrix
+# never did, so every cell was graded against THE OPERATOR'S config — including the model
+# that config selects — and a difference there read as a difference between opencode
+# releases. Measured: without isolation `opencode acp` "failed" identically on 2.0.32,
+# 2.1.4, 2.2.7 and 2.3.2; with it the same cell passes on 2.1.4 (8/8). A harness that
+# measures the operator reports the operator's setup as a property of the software.
+#
+# No provider block is copied in. With a private directory the agent advertises its own
+# models (measured: 13, `currentValue` `opencode/tidepool-alpha-free`), which is all a cell
+# needs to have something to select — and copying the operator's provider would put their
+# account back inside the thing being measured.
+#
+# ONE escape hatch, for deliberately reproducing an operator's environment:
+# `USE_REAL_TUI_CONFIG=1`. There is no `SKIP_*` switch — a skip switch means "the default
+# stays wrong and you must remember the incantation".
+TUI_CONFIG_DIR="$WORK/tui-config"
+mkdir -p "$TUI_CONFIG_DIR"
+# v2.3.0 moved CLI config from `tui.json` to `cli.json` (`tui.json` is read only to migrate),
+# so both are written for releases either side of the change — same as `e2e-real-tui.sh`.
+printf '{"session":{"verbosity":"high"}}\n' >"$TUI_CONFIG_DIR/cli.json"
+printf '{"session":{"verbosity":"high"}}\n' >"$TUI_CONFIG_DIR/tui.json"
+if [ "${USE_REAL_TUI_CONFIG:-0}" = "1" ]; then
+  echo "  ! USE_REAL_TUI_CONFIG=1: cells read the operator's own ~/.config/opencode — a verdict" >&2
+  echo "    from this run is about that configuration, NOT about the version under test" >&2
+  unset OPENCODE_CONFIG_DIR
+else
+  export OPENCODE_CONFIG_DIR="$TUI_CONFIG_DIR"
+fi
+ONLY="${ONLY:-claude,codex,opencode,dsh-acp,qwen,gemini}"
 FAILED=0
 BLOCKED=0
 PASSED=0
@@ -103,7 +134,7 @@ cell() {
   cat >"$WORK/$name.sh" <<EOF
 #!/bin/bash
 cd "$dir"
-exec env $extra_env OPENCODE_ACP_CLIENT_SESSION_MAP="$map" OPENCODE_BIN="$OC" node "$HERE/dist/index.js" --bridge-log "$log" -- $agent
+exec env $extra_env ${OPENCODE_CONFIG_DIR:+OPENCODE_CONFIG_DIR="$OPENCODE_CONFIG_DIR"} OPENCODE_ACP_CLIENT_SESSION_MAP="$map" OPENCODE_BIN="$OC" node "$HERE/dist/index.js" --bridge-log "$log" -- $agent
 EOF
   chmod +x "$WORK/$name.sh"
   tmux kill-session -t "$session" 2>/dev/null
@@ -167,27 +198,35 @@ EOF
   # own credentials: it is a failure, and it must never be able to match the broad
   # `Error:` arm, so it is tested FIRST and the match is required to be an outcome
   # we did not write.
-  local done_turn=0 dead=0 body=''
+  # ★ ORDER MATTERS, and it cost a whole run to learn (measured 2026-11-22, qwen and gemini
+  # on opencode v2.1.4): the reply test comes FIRST, the busy test second, the dead test
+  # third. The earlier order (hint first, reply inside `if ! hint`) reported three cells as
+  # "the turn never finished (esc interrupt still up after ~4min)" while the saved panes,
+  # captured 2 s later, held ZERO `esc interrupt` (1856 bytes for qwen): the hint is one row
+  # and scrolls out of a 42-row pane once the error row wraps, so a FINISHED turn never
+  # satisfied the terminator and the loop ran its full 150x2 s. The other order (dead first)
+  # is just as wrong: `grep 'agent exited'` matches the TUI's own last words in the history
+  # (`the TUI exited, shutting down`), so a healthy agent was graded `dead`.
+  local done_turn=0 dead=0 quiet=0 body=''
   for _ in $(seq 1 150); do
     sleep 2
     body="$(tmux capture-pane -p -t "$session" 2>/dev/null)"
-    # ★ Both conditions, not just the hint: the interrupt hint can vanish
-    # while the turn is still settling (measured: the bridge logged the prompt,
-    # then the epilogue, with no turn work between — the script had exited on
-    # the hint alone). A turn is over when the hint is gone AND the outcome is
-    # on screen: reply text, or the agent's own error.
-    if ! printf '%s' "$body" | grep -q 'esc interrupt'; then
-      # Our own bridge error must never count as "the agent answered". A dead
-      # agent also leaves the spinner up, so the `esc interrupt` guard above can
-      # keep the loop going for the full ~4 minutes — hence this check sits
-      # INSIDE the loop and breaks out immediately.
-      if printf '%s' "$body" | grep -q 'could not start the agent\|agent exited'; then
-        dead=1
-        break
-      elif printf '%s' "$body" | grep -v "Reply with exactly" | grep -q 'MATRIX_OK\|Authentication required'; then
-        done_turn=1
-        break
-      fi
+    # 1. The agent's own answer, with the echo of the prompt we typed excluded.
+    if printf '%s' "$body" | grep -v "Reply with exactly" | grep -q 'MATRIX_OK\|Authentication required'; then
+      done_turn=1
+      break
+    fi
+    # 2. Still busy: wait. The hint's ABSENCE is not a verdict — it scrolls.
+    printf '%s' "$body" | grep -q 'esc interrupt' && continue
+    # 3. Our own bridge error: the agent process never came up.
+    if printf '%s' "$body" | grep -q 'could not start the agent\|agent exited'; then
+      dead=1
+      break
+    fi
+    # 4. Not busy, no reply, no error: stop after 30 s and grade it "no reply" below.
+    quiet=$((quiet + 1))
+    if [ "$quiet" -ge 15 ]; then
+      break
     fi
   done
   save_pane "$name" "$session"
@@ -205,7 +244,11 @@ EOF
     return
   fi
   if [ "$done_turn" != 1 ]; then
-    fail "$name: the turn never finished (esc interrupt still up after ~4min)"
+    # ★ Report what was observed. The old message asserted "esc interrupt still up", which was
+    # measurably false for every cell it cost a run — a failure that misdiagnoses itself.
+    local busy=no
+    printf '%s' "$body" | grep -q 'esc interrupt' && busy=yes
+    fail "$name: the turn produced no visible outcome in ~5min (TUI busy: $busy)"
     tmux kill-session -t "$session" 2>/dev/null
     return
   fi

@@ -167,6 +167,11 @@ pnpm e2e:entry    # = bash scripts/e2e-entry.sh  the single entry point: start t
 pnpm e2e:todo:win # = node scripts/e2e-todo-windows.mjs  ★ MODE=todo for Windows (no tmux there)
                   #   node-pty stands in for tmux; asserts the v2.1 todo sidebar on the
                   #   captured pane. Skips on v2.0 like the bash mode; no-ops off Windows.
+pnpm e2e:matrix   # = node scripts/e2e-matrix-real.mjs  ★ TUI build × REAL agent, one 3-turn conversation
+                  #   per cell; grades from the transcript + the ACP error, never a captured pane.
+                  #   **Spends tokens.** Runs on all three platforms (no tmux).
+pnpm e2e:conversation # = node scripts/e2e-real-conversation.mjs -- <agent>  one agent, 3 turns.
+                  #   **Spends tokens.** The single-cell form, for checking one agent by hand.
 pnpm e2e:protocol # = node scripts/e2e-protocol.mjs  ★ the ONLY end-to-end check that runs on Windows
                   #   (no bash, no tmux): ready line → session → turn → real catalog, not the
                   #   acp/default placeholder → model switch → interrupt shape

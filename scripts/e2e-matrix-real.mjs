@@ -1,0 +1,356 @@
+#!/usr/bin/env node
+/**
+ * The full matrix: every opencode v2 TUI version × every real agent, one real conversation each.
+ *
+ *   node scripts/e2e-matrix-real.mjs                 # whatever TUI versions and agents it finds
+ *   node scripts/e2e-matrix-real.mjs --tui 2.1.4 --agents opencode,qwen
+ *
+ * ★ Why this exists next to the other two. `scripts/e2e-agent-matrix.sh` runs agents through
+ * the real TUI in tmux, which cannot run on Windows and grades from a captured pane — a source
+ * that mis-graded three cells (the agents' own credential errors reach the screen as
+ * `Error: Internal error`, not as the text they contain). `scripts/e2e-protocol.mjs` uses the
+ * fake agent, so it says nothing about a real model. This drives the same HTTP surface the TUI
+ * uses, one real conversation per cell, and grades from the transcript plus the agent's own
+ * error text.
+ *
+ * **Spends tokens** — one 3-turn conversation per cell. Deliberately not in `pnpm verify`.
+ *
+ * A cell is PASS, BLOCKED or FAIL:
+ *   • PASS    the model answered three turns and recalled the earlier one;
+ *   • BLOCKED the agent's own credentials/configuration refused it (not our bug);
+ *   • FAIL    anything else — the bridge never came up, the agent exited, a turn hung.
+ * The distinction matters: a BLOCKED cell is somebody's missing key, a FAIL cell is a lead.
+ */
+import { spawn } from 'node:child_process';
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, '');
+const ENTRY = join(ROOT, 'dist', 'index.js');
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// ---------------------------------------------------------------- arguments
+const args = process.argv.slice(2);
+const argOf = (name) => {
+  const i = args.indexOf(`--${name}`);
+  return i >= 0 ? args[i + 1] : undefined;
+};
+const onlyTui = argOf('tui')?.split(',');
+const onlyAgents = argOf('agents')?.split(',');
+
+/**
+ * The TUI builds to test, discovered rather than hard-coded.
+ *
+ * `OPENCODE_TUI_VERSION_DIRS` wins (comma-separated `version=path`), then `/tmp/oc-<version>`
+ * from the installs this repo's notes use. A hard-coded list would silently test a stale set
+ * after a new version is installed.
+ */
+function discoverTuis() {
+  const explicit = process.env['OPENCODE_TUI_VERSION_DIRS'];
+  const found = [];
+  if (explicit) {
+    for (const entry of explicit.split(',')) {
+      const [version, path] = entry.split('=');
+      if (version && path) found.push({ version, bin: path });
+    }
+    return found;
+  }
+  // Windows has no `/tmp` and its npm shim is a `.cmd`, while the real program sits in the
+  // package's own `bin/`. Both layouts are searched so one script serves all three platforms.
+  const roots = [];
+  if (process.platform === 'win32') {
+    // `C:\oc-2.1.4` (the layout the Windows notes use)
+    for (const drive of ['C:', 'D:']) {
+      try {
+        for (const name of readdirSync(`${drive}\\`)) {
+          if (/^oc-2\.\d+\.\d+$/.test(name)) roots.push(join(`${drive}\\`, name));
+        }
+      } catch {
+        /* no such drive */
+      }
+    }
+  } else {
+    try {
+      for (const name of readdirSync('/tmp')) {
+        if (/^oc-2\.\d+\.\d+$/.test(name)) roots.push(join('/tmp', name));
+      }
+    } catch {
+      /* no /tmp */
+    }
+  }
+  for (const root of roots.sort()) {
+    const candidates = [
+      join(root, 'node_modules', '@opencode', 'cli', 'bin', process.platform === 'win32' ? 'opencode.exe' : 'opencode'),
+      join(root, 'node_modules', '.bin', process.platform === 'win32' ? 'opencode.cmd' : 'opencode'),
+    ];
+    const bin = candidates.find((c) => existsSync(c));
+    if (bin) found.push({ version: root.split(/[\\/]/).pop().slice(3), bin });
+  }
+  return found;
+}
+
+/**
+ * The agents to drive. `command` is an argv array: no shell, so a quoted path cannot be
+ * re-split, and on Windows a `.cmd` would need `cmd.exe` — these are all invoked as programs.
+ */
+function discoverAgents() {
+  // ★ `opencode acp` IS an agent cell, and it was wrongly excluded.
+  //
+  // The reasoning was "it is the TUI's own binary, so the version axis already covers it" — which
+  // is wrong in the one way that matters: the agent command is built from the SAME binary the
+  // version selects, so on 2.0.32 the agent under test is a 2.0.32 ACP server. Leaving it out
+  // made the matrix blind to the combination the product actually ships, and it hid a real find
+  // (v2.0.18's ACP cannot see a provider from `opencode.json`; v2.0.32 can). Every platform now
+  // runs it, with `--version`'s binary for that row.
+  //
+  // On Windows the adapters live in a scratch prefix and their shims are `.cmd`, which `spawn`
+  // cannot execute without a shell — so the real JS entry is invoked through `node` instead.
+  // Probing for the entry rather than assuming it keeps this working on all three platforms.
+  const probe = join(ROOT, '_probe', 'node_modules');
+  // ★ The flags come from the caller and must survive. An earlier version of this helper
+  // returned `[node, entry]` only, dropping `--acp` — so qwen started as a plain CLI, never
+  // spoke ACP, and every cell timed out waiting for `initialize` (measured: a 117-119 s hang
+  // per cell, which reads like a slow agent rather than a missing argument).
+  const adapter = (pkg, dir, ...flags) => {
+    const entry = join(probe, ...pkg.split('/'), dir);
+    return existsSync(entry) ? [process.execPath, entry, ...flags] : undefined;
+  };
+  const candidates = [
+    {
+      id: 'claude',
+      command:
+        adapter('@agentclientprotocol/claude-agent-acp', 'dist/index.js') ?? [
+          'npx',
+          '-y',
+          '@agentclientprotocol/claude-agent-acp',
+        ],
+    },
+    {
+      id: 'codex',
+      command:
+        adapter('@agentclientprotocol/codex-acp', 'dist/index.js') ?? ['npx', '-y', '@agentclientprotocol/codex-acp'],
+    },
+    {
+      id: 'qwen',
+      command: adapter('@qwen-code/qwen-code', 'cli-entry.js', '--acp') ?? ['qwen', '--acp'],
+    },
+    { id: 'dsh', command: ['dsh', '--profile', 'acp'] },
+  ];
+  return candidates;
+}
+
+// ---------------------------------------------------------------- one cell
+async function runCell(tui, agent) {
+  const work = mkdtempSync(join(tmpdir(), 'oac-mx-'));
+  // A FIXED port is a trap: a bridge left over from an earlier cell keeps answering on it, and
+  // the new cell then waits for a ready line that belongs to software it did not start. The
+  // bridge picks a free port itself when this is omitted.
+  const port = String(5800 + Math.floor(Math.random() * 180));
+  const bridge = spawn(
+    process.execPath,
+    [ENTRY, '--no-tui', '--bridge-port', port, work, '--', ...agent.command],
+    {
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        OPENCODE_ACP_CLIENT_SESSION_MAP: join(work, 'sessions.json'),
+        // OPENCODE_BIN is the TUI binary, NOT the agent's. Setting it here made the bridge
+        // resolve a version and probe it while the agent was starting, which is work this cell
+        // does not need; the TUI is not launched at all in --no-tui mode.
+        OPENCODE_DISABLE_AUTOUPDATE: "1",
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  let log = '';
+  bridge.on('error', (err) => {
+    log += `\n[spawn error] ${err.message}\n`;
+  });
+  bridge.stdout.on('data', (d) => {
+    log += String(d);
+  });
+  bridge.stderr.on('data', (d) => {
+    log += String(d);
+  });
+
+  const api = async (path, init) => {
+    const response = await fetch(`http://127.0.0.1:${port}${path}`, init);
+    const text = await response.text();
+    let body;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = undefined;
+    }
+    return { status: response.status, body, text };
+  };
+
+  const rows = async (session) => {
+    const { body } = await api(`/api/session/${session}/message`);
+    return (body?.data ?? [])
+      .filter((row) => row.type === 'assistant')
+      .map((row) => ({
+        id: row.id,
+        text: (row.content ?? []).map((part) => part.text ?? '').join(''),
+        model: row.model,
+        error: row.error?.message,
+        done: Boolean(row.time?.completed),
+      }))
+      .reverse();
+  };
+
+  const turn = async (session, id, text, timeoutMs = 180_000) => {
+    // Track by ROW ID, not by count. Counting assumed every turn appends a new assistant row;
+    // when the bridge instead reuses or completes an existing one, the count never grows and
+    // the wait times out — or, worse, returns whichever row happened to be there.
+    const seen = new Set((await rows(session)).filter((r) => r.done).map((r) => r.id));
+    await api(`/api/session/${session}/prompt`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id, text }),
+    });
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const list = await rows(session);
+      // ★ `rows()` reverses (the API is newest-first), so element 0 is the NEWEST row. Taking
+      // the last element returned the OLDEST completed row — turn 1's answer read as turn 3's,
+      // which graded a correct memory as a failure.
+      const fresh = list.find((row) => row.done && !seen.has(row.id));
+      if (fresh) return fresh;
+      await sleep(400);
+    }
+    return undefined;
+  };
+
+  try {
+    let url;
+    for (let i = 0; i < 160 && !url; i += 1) {
+      if (/"url":"([^"]+)"/.test(log)) url = true;
+      else await sleep(250);
+    }
+    if (!url) {
+      // A command the machine does not have is not a defect in the software under test: the
+      // bridge says so and nothing hangs. Distinguish it from a real failure.
+      if (/agent command not found|not found/i.test(log) && /\[bridge\]/.test(log)) {
+        return { verdict: 'BLOCKED', reason: 'agent command not available on this machine', log };
+      }
+      const tail = log.split('\n').filter((l) => /acp|error|Error|exit/i.test(l)).slice(-4).join(' | ');
+    return { verdict: 'FAIL', reason: `bridge never became ready${tail ? `: ${tail}` : ''}`, log };
+    }
+
+    const created = await api('/api/session', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    const session = created.body?.data?.id;
+    if (!session) return { verdict: 'FAIL', reason: `no session (HTTP ${created.status})`, log };
+
+    const t1 = await turn(session, 'mx_1', 'In one short sentence: what is a protocol?');
+    if (!t1) return { verdict: 'FAIL', reason: 'turn 1 never finished', log };
+    if (t1.error) return { verdict: 'BLOCKED', reason: t1.error, log };
+    if (t1.text.trim() === '') return { verdict: 'FAIL', reason: 'turn 1 produced no text', log };
+
+    const t2 = await turn(session, 'mx_2', 'Now answer with exactly one word: REPEAT. Nothing else.');
+    if (!t2) return { verdict: 'FAIL', reason: 'turn 2 never finished', log };
+    if (t2.error) return { verdict: 'BLOCKED', reason: t2.error, log };
+
+    const t3 = await turn(
+      session,
+      'mx_3',
+      'Which word did I ask you to say in my previous message? Reply with just that word.',
+    );
+    if (!t3) return { verdict: 'FAIL', reason: 'turn 3 never finished', log };
+    if (t3.error) return { verdict: 'BLOCKED', reason: t3.error, log };
+    // ★ The word must APPEAR, not be the whole answer. "Reply with just that word" is a request,
+    // and a real model routinely wraps it — codex prefixes a metadata warning, others add a
+    // sentence. Requiring the reply to equal the word graded a correct answer as a failure,
+    // which is the same mistake as testing a UI for an exact string: the assertion has to match
+    // what is being proven ("the history survived"), not a formatting habit.
+    const recalled = /\brepeat\b/i.test(t3.text);
+    if (!recalled && !/\brepeat\b/i.test(t2.text)) {
+      return { verdict: 'FAIL', reason: `turn 3 did not recall: ${JSON.stringify(t3.text.slice(0, 80))}`, log };
+    }
+    if (!recalled) {
+      // The answer for turn 2 did not itself contain the word, so "turn 3 mentions it" is not
+      // proof of memory. Say so rather than passing on a coincidence.
+      return { verdict: 'UNKNOWN', reason: `turn 3 gave ${JSON.stringify(t3.text.slice(0, 60))}`, log };
+    }
+
+    const all = await rows(session);
+    const models = [...new Set(all.map((r) => (r.model ? `${r.model.providerID}/${r.model.id}` : '(none)')))];
+    return {
+      verdict: 'PASS',
+      reason: `3 turns, history intact, model ${models.join('|')}`,
+      model: models[0],
+      log,
+    };
+  } finally {
+    bridge.kill();
+    try {
+      rmSync(work, { recursive: true, force: true });
+    } catch {
+      /* the OS collects temp */
+    }
+  }
+}
+
+// ---------------------------------------------------------------- the run
+const tuis = discoverTuis().filter((t) => !onlyTui || onlyTui.includes(t.version));
+const agents = discoverAgents().filter((a) => !onlyAgents || onlyAgents.includes(a.id));
+
+if (tuis.length === 0) {
+  console.error('no TUI builds found. Install one with:');
+  console.error('  mkdir -p /tmp/oc-2.1.4 && cd /tmp/oc-2.1.4 && npm init -y && npm i @opencode/cli@2.1.4');
+  console.error('or set OPENCODE_TUI_VERSION_DIRS="2.1.4=/path/to/opencode,..."');
+  process.exit(2);
+}
+
+console.log(`▸ TUI versions: ${tuis.map((t) => t.version).join(', ')}`);
+console.log(`▸ agents:       ${agents.map((a) => a.id).join(', ')}`);
+console.log(`▸ cells:        ${tuis.length * agents.length}\n`);
+
+const results = [];
+for (const tui of tuis) {
+  // `opencode acp` is built PER ROW: the agent command is this row's own TUI binary, which is
+  // the whole point of testing it here rather than once. `command` is resolved lazily so a
+  // version that cannot serve ACP reports as its own cell instead of poisoning the list.
+  const agentsForRow = [
+    { id: 'opencode', command: [tui.bin, 'acp'] },
+    ...agents,
+  ];
+  for (const agent of agentsForRow) {
+    const label = `${tui.version} × ${agent.id}`;
+    process.stdout.write(`▸ ${label} … `);
+    if (process.env['MATRIX_DEBUG']) console.log('\n  argv:', JSON.stringify(agent.command));
+    const started = Date.now();
+    let result;
+    try {
+      result = await runCell(tui, agent);
+    } catch (err) {
+      result = { verdict: 'FAIL', reason: err instanceof Error ? err.message : String(err), log: '' };
+    }
+    const seconds = Math.round((Date.now() - started) / 1000);
+    if (result.verdict !== 'PASS' && result.log) {
+      const { writeFileSync, mkdirSync } = await import('node:fs');
+      mkdirSync(join(ROOT, '.artifacts', 'matrix-real'), { recursive: true });
+      writeFileSync(join(ROOT, '.artifacts', 'matrix-real', `fail-${tui.version}-${agent.id}.log`), result.log);
+    }
+    const mark = result.verdict === 'PASS' ? '✓' : result.verdict === 'BLOCKED' ? '·' : '✗';
+    console.log(`${mark} ${result.verdict} (${seconds}s) — ${String(result.reason).slice(0, 100)}`);
+    results.push({ label, ...result });
+    await sleep(1500);
+  }
+}
+
+console.log('\n── matrix');
+const width = Math.max(...results.map((r) => r.label.length));
+for (const r of results) {
+  const mark = r.verdict === 'PASS' ? '✓' : r.verdict === 'BLOCKED' ? '·' : '✗';
+  console.log(`  ${mark} ${r.label.padEnd(width)}  ${r.verdict.padEnd(8)} ${String(r.reason).slice(0, 90)}`);
+}
+const count = (v) => results.filter((r) => r.verdict === v).length;
+console.log(`\n── ${count('PASS')} passed, ${count('BLOCKED')} blocked by the agents themselves, ${count('FAIL')} failed`);
+process.exit(count('FAIL') === 0 ? 0 : 1);

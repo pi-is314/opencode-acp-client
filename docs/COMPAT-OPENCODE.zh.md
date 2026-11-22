@@ -160,7 +160,7 @@ shell 的 `execFile`/`spawn` 起不了它——即使命令就在 `PATH` 上，�
 
 写在 `opencode.json` 里的 provider，在**每个** v2 版本的 TUI 和 `opencode models` 里都能看到，
 但 `opencode acp` 的模型列表在 `v2.0.18` 上只从内置 provider 解析：`session/new` 只给出 2 个
-选项（`deepseek/*`），没有配置里的 `builtin-codemaker`，`session/set_config_option` 也以
+选项（全是内置 provider），没有配置里那个，`session/set_config_option` 也以
 `model not found` 拒绝。同一台机器、同一份配置，五个二进制实测：
 
 | 二进制 | `configOptions.model` |
@@ -170,3 +170,20 @@ shell 的 `execFile`/`spawn` 起不了它——即使命令就在 `PATH` 上，�
 
 所以把 agent 指向自定义 provider，需要 `v2.0.32` 或更新。这里修不了——模型解析发生在
 `opencode` 的 ACP 子命令内部，在桥被告知任何东西之前。
+
+### 已验证的矩阵
+
+`node scripts/e2e-matrix-real.mjs` 把它能找到的每个 TUI 构建 × 每个 agent 组合起来，每格跑**三轮真实对话**，
+走的是 TUI 用的那套 HTTP 面。判定依据是 transcript 加 agent 自己的错误原文，**不是截屏**——agent 的真实错误
+藏在 ACP payload 里，屏幕上只显示 `Error: Internal error`。
+
+2026-11-22 的结果，全部指向同一个 OpenAI 兼容端点，每一格都是**必须回忆起上一轮**的真实对话：
+
+| 平台 | 构建 | agent | 结果 |
+|---|---|---|---|
+| macOS | 2.0.32 / 2.1.4 / 2.2.7 / 2.3.2 | `opencode acp`、claude-agent-acp、codex-acp、qwen、`dsh --profile acp` | **20/20** |
+| Linux | 2.0.32 / 2.1.4 / 2.2.7 / 2.3.2 | 同上五个 | **20/20** |
+| Windows | 2.0.32 / 2.1.4 / 2.3.2 | 同上五个，但没装 `dsh` | **12 通过，3 BLOCKED** |
+
+`opencode acp` 是按构建逐行测的，因为 agent 命令**就是那个构建的二进制**——见 E2E-PITFALLS #14。BLOCKED
+表示 agent 自己的凭证或模型名把它拒了；Windows 上的 `dsh` 是那台机器没装它，判定如实这么说，而不是算失败。

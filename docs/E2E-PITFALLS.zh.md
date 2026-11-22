@@ -192,6 +192,8 @@ export OPENCODE_CONFIG_DIR="$TUI_CONFIG_DIR"
 
 ★ 注意**配置文件名会变**：v2.3.0 起是 `cli.json`，`tui.json` 只用于迁移。**两个都写**覆盖新旧版本。
 ★ 钉住的是**验收脚本**的偏好，不是产品行为——用户想要折叠依然是他的选择。
+★ **光 `export` 不够**：脚本必须**自己拥有**这个目录，否则它测的是操作者的配置（见第 10 条——
+同一条规则，代价是一整张 4 版本矩阵）。
 
 ---
 
@@ -203,6 +205,145 @@ export OPENCODE_CONFIG_DIR="$TUI_CONFIG_DIR"
 **做法**：`KEEP=1` 保留，并在失败时打印路径。
 
 ---
+
+## 10. ★★ 只"打开"选择器的探针，照样会改变你要测的东西
+
+**现象**：矩阵在 opencode v2.1.4 上把 `opencode acp` 判成 **BLOCKED**，错误是
+`Error: Internal error: No permission to use model 'deepseek-v4-flash-inhouse-yd'`；而同一条命令
+手动跑却是好的。
+
+**原因**：`feature_probes` 的 (b) 步只**打开** `/model` 然后按 Escape，并没有选。TUI 的模型选择是
+**全局的**，不是按会话的；而且选择器按**前缀**过滤。**顺序是选择器自己的，不是配置里的**：配置中
+这个 provider 有 40 个模型，`MiniMax-M3` 排第 0、`deepseek-flash` 排第 14，而选择器自己排一遍，
+打开时停在**另一个**条目上。所以什么都没选就按 Enter，落到的模型**不是**配置里那个
+（这里落到了同一个 provider 下的另一个模型，而那个账号没有它的权限），下一回合就死在
+模型上。**4 次完整运行 + 1 次单 cell 运行，全部复现。**
+
+⚠️ 具体位置取决于选择器的排序和这台机器看得见哪些模型，**不要在测试里写死数字**——规则只是
+"第一行不是你配置的模型"。
+
+**为什么会误导**：结论读起来像"agent 的凭证不对"。可 agent 根本没跑——日志里**一条**
+`[acp] [agent]` 都没有，错误来自 TUI 自己的模型链路。一个多余的探针因此换来三个错误的
+`BLOCKED`，每个版本一个。
+
+**做法**：把配置目录隔离成**默认行为**，不要藏在一个 skip 开关后面——skip 开关意味着"默认仍然是错的"。
+
+```bash
+TUI_CONFIG_DIR="$WORK/tui-config"; mkdir -p "$TUI_CONFIG_DIR"
+printf '{"session":{"verbosity":"high"}}\n' > "$TUI_CONFIG_DIR/cli.json"
+printf '{"session":{"verbosity":"high"}}\n' > "$TUI_CONFIG_DIR/tui.json"
+export OPENCODE_CONFIG_DIR="$TUI_CONFIG_DIR"          # 默认；USE_REAL_TUI_CONFIG=1 才退出隔离
+```
+
+**为什么第 0 项会赢**：选择器按**前缀**过滤；列表首行若是操作者没有权限的模型，那么任何输进
+过滤框的文字都可能把**那一行**选中。换成私有目录后首行是 agent 真能服务的模型，同一个探针就
+变无害了——但规则不变：**不是断言对象的探针，不许改状态。** `SKIP_MODEL_PROBE=1` 就是为此保留，
+平时用不上。
+
+★ 更深的原因——也是让一整张 4 版本矩阵失去意义的那一环——**就是第 8 条**：`OPENCODE_CONFIG_DIR`
+没设，所以被测的 TUI 读了操作者的 `~/.config/opencode/opencode.json`，连模型都是从那来的。**实测**：
+给它一个私有配置目录，同一个 `opencode acp` cell 在 **v2.1.4 上直接通过**（隔离后 agent 自己广告
+13 个模型，`currentValue: opencode/tidepool-alpha-free`）；用操作者的配置，它在**四个版本上全挂**。
+
+★ 选择器还会**写 `~/.config/opencode/tui.json`**——操作者自己的文件。跑矩阵前留还原点，跑完比对
+校验和（`openssl md5`），就像探测数据库要先围栏。本次 4 轮扫描实测：未被改动，mtime 仍是
+`Oct 20 16:58`。
+
+---
+
+## 11. ★★ `esc interrupt` 不是回合结束的判据——它会滚走
+
+**现象**：一次完整矩阵把三个 cell 报成"the turn never finished（esc interrupt 4 分钟后仍然挂着）"。
+而**2 秒后**保存的屏幕里 `esc interrupt` **一个都没有**（qwen 1856 字节、gemini 2529 字节），
+agent 自己的错误行就摆在那儿。
+
+**原因**：等待循环**先**判断 `grep -q 'esc interrupt'`，只在 `if ! … esc interrupt …` 里面才看回复。
+提示只占一行，错误行一换行它就滚出了 42 行屏幕——于是**已经结束**的回合永远满足不了终止条件，
+循环白跑满 150 × 2 秒。
+
+**做法**：循环里的判断顺序是**先结果、再"忙"、最后"死了"**，并且在"提示还在"时**绝不能只 `continue`**——
+屏幕满了以后，提示在不在都不可信。
+
+```bash
+# 1. agent 自己的回答（排除我们打字的回显，见 13）
+if printf '%s' "$body" | grep -v "Reply with exactly" | grep -q 'MATRIX_OK\|Authentication required'; then
+  done_turn=1; break
+fi
+# 2. TUI 还忙：等。提示消失本身不是一个结论。
+printf '%s' "$body" | grep -q 'esc interrupt' && continue
+# 3. 我们自己的桥错误：agent 根本没起来
+if printf '%s' "$body" | grep -q 'could not start the agent\|agent exited'; then dead=1; break; fi
+```
+
+★ 失败文案要报告**实际观测到的东西**（`TUI busy: no`），而不是脚本**预期**的东西。它坑掉的每个
+cell，"esc interrupt 仍然挂着"这句话都是**实测为假**的，而这种措辞会把后来的人指向错误的组件。
+
+---
+
+## 12. ★ 我们自己的错误行会被当成"agent 回答了"
+
+**现象**：一个 agent 进程**已经死掉**的 cell，被判成"✓ 回复渲染在屏幕上"。
+
+**原因**：成功判定是 `grep -q 'MATRIX_OK\|Authentication required\|Error:'`，而本桥自己的行是
+`Error: could not start the agent: agent exited: ACP connection closed`。死掉的 agent 命中了**我们的**
+`Error:`，于是 cell 通过。`error` 分支有同一个洞、只差一个词：死掉的 agent 被报成 **BLOCKED**，
+也就是报成"agent 的凭证问题"。
+
+**做法**：先排除我们自己的字符串，再找 agent 的；并把 `dead` 作为**独立的 FAIL** 最先判断，
+同时用日志互相印证——那条日志是桥自己写的，与渲染无关：
+
+```bash
+if grep -aq 'agent exited code=' "$log"; then fail "$name: the agent process did not come up"; fi
+```
+
+**规则**：光一个 `Error:` 永远不等于"agent 回答了"。真正窄而有意义的形状是
+`Authentication required` / agent 自己的 API 错误，其余每个 `Error:` 都该先看清是谁的行。
+
+---
+
+## 13. ★ 提示自己的回显会被当成回答——而且 tmux 里没有 `/usr/sbin`
+
+**现象 (a)**：`MATRIX_OK` 只出现在**输入框**和**我们自己打的用户行**里，却被判成"回复渲染在屏幕上"。
+**原因**：要找的字符串**就是**提示本身。**做法**：每次回复断言前排除回显——
+`grep -v "Reply with exactly"`。
+
+**现象 (b)**：`gemini --acp` 启动即死，`uncaught Error: spawnSync sysctl ENOENT`，连会话都还没建；
+而这个失败看起来像 TUI、模型或版本问题。
+
+**原因**：tmux 的 `PATH` 是 `…:/usr/local/bin:/usr/bin:/bin`——**没有 `/usr/sbin`**，而 `sysctl` 在那儿。
+这既不是 agent 凭证，也和 opencode 无关：agent 被扔进了一个起不来的环境。
+
+**做法**：在脚本里补上系统 sbin 目录，并把启动环境当成证据的一部分。
+
+```bash
+case ":$PATH:" in *":/usr/sbin:"*) ;; *) PATH="$PATH:/usr/sbin" ;; esac
+case ":$PATH:" in *":/sbin:"*) ;; *) PATH="$PATH:/sbin" ;; esac
+export PATH
+```
+
+★ 遇到"agent 退出了"，先把**它启动时的 PATH** 打出来再怀疑 agent。这里 agent 自己的 stderr 已经把缺
+什么说得清清楚楚；之所以一小时没人看见，是因为 cell 的结论早就写成了"blocked"。
+
+---
+
+## 14. ★★ 按 ID 等**新的行**，不要按数量——也别把自己出货的 agent 排除在外
+
+**现象**：第 3 轮（"我上一条让你说的是哪个词？"）答成了第 1 轮的内容，明明记住了的模型被判成没记住。
+
+**原因**：等待循环数"已完成的 assistant 行"，然后返回它找到的**最新**那行。两个独立的错误在这里撞上：
+桥可能**补全一个已存在的行**而不是追加新行，数量就永远不涨，循环于是落到"反正有行"；而 API 返回的是
+最新在前，"最后一个元素"其实是**最旧**的那行。正确做法是拿 prompt 之前的行 **id** 集合，取第一个
+既新又已完成的行。
+
+**同一类的第二个错误**：矩阵把 `opencode acp` 从 agent 列表里排除了，理由是"它是 TUI 自己的二进制，
+版本轴已经覆盖"。并没有——agent 命令就是用版本选中的那个二进制拼出来的，所以 `2.0.32 × opencode`
+是"2.0.32 的 TUI 驱动 2.0.32 的 ACP server"，正是产品出货的组合。排除它，恰好在最要紧的地方瞎掉：
+v2.0.18 的 ACP 看不见 `opencode.json` 里的 provider，v2.0.32 能看见，而网格里没有任何一格会说出这件事。
+**你的产品默认启动的那个 agent，本身就是一个格子。**
+
+**规则**：对"会增长的表"设等待条件，必须指名元素（id），而不是它的出现顺序。矩阵必须包含产品默认启动的
+那个 agent。
+
 
 ## 自查清单
 

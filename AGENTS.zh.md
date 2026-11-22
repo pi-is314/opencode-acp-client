@@ -153,6 +153,10 @@ pnpm e2e:entry    # = bash scripts/e2e-entry.sh  单入口：起 TUI、退出码
 pnpm e2e:todo:win # = node scripts/e2e-todo-windows.mjs  ★ Windows 版的 MODE=todo（那边没有 tmux）
                   #   用 node-pty 代替 tmux，在抓到的画面上断言 v2.1 的 todo 侧栏。
                   #   v2.0 上跳过（与 bash 版一致）；非 Windows 上什么都不做。
+pnpm e2e:matrix   # = node scripts/e2e-matrix-real.mjs  ★ TUI 构建 × 真实 agent，每格三轮真实对话；
+                  #   判定看 transcript + ACP 错误原文，**不看截屏**。**花 token。**三平台都能跑（不需要 tmux）。
+pnpm e2e:conversation # = node scripts/e2e-real-conversation.mjs -- <agent>  单个 agent 三轮，
+                  #   手动查某个 agent 时用。**花 token。**
 pnpm e2e:protocol # = node scripts/e2e-protocol.mjs  ★ 唯一能在 Windows 上跑的端到端检查
                   #   （不需要 bash、不需要 tmux）：ready 行 → 会话 → 回合 → 真实目录
                   #   （不是 acp/default 占位）→ 模型切换 → 打断的应答形状

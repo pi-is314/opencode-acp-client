@@ -185,7 +185,7 @@ suite rather than skipped — measured: 432 passed / 0 skipped on Windows.
 A provider declared in `opencode.json` is visible to the TUI and to `opencode models` on
 **every** v2 release, but `opencode acp` resolved its model list from the built-in providers
 only on `v2.0.18`: `session/new` answered with 2 choices (`deepseek/*`) and no
-`builtin-codemaker`, and `session/set_config_option` refused the configured id with
+the configured provider, and `session/set_config_option` refused the configured id with
 `model not found`. Measured across five binaries on one machine, same config:
 
 | binary | `configOptions.model` |
@@ -196,3 +196,24 @@ only on `v2.0.18`: `session/new` answered with 2 choices (`deepseek/*`) and no
 So an agent pointed at a custom provider needs `v2.0.32` or newer. Nothing here can fix it —
 the model resolution happens inside `opencode`'s ACP subcommand, before the bridge is told
 anything.
+
+### The verified grid
+
+`node scripts/e2e-matrix-real.mjs` runs every TUI build it can find × every agent it can find,
+one three-turn conversation each, through the HTTP surface the TUI uses. It grades from the
+transcript plus the agent's own error text, not from a captured screen — the screen shows
+`Error: Internal error` for an agent whose real error is inside the ACP payload.
+
+Result on 2026-11-22, against a single OpenAI-compatible endpoint, every cell a real conversation
+that had to recall an earlier turn:
+
+| platform | builds | agents | result |
+|---|---|---|---|
+| macOS | 2.0.32, 2.1.4, 2.2.7, 2.3.2 | `opencode acp`, claude-agent-acp, codex-acp, qwen, `dsh --profile acp` | **20/20** |
+| Linux | 2.0.32, 2.1.4, 2.2.7, 2.3.2 | same five | **20/20** |
+| Windows | 2.0.32, 2.1.4, 2.3.2 | same five, `dsh` not installed | **12 pass, 3 blocked** |
+
+`opencode acp` is a row per build because the agent command IS that build's binary — see
+E2E-PITFALLS #14. A blocked cell is an agent whose own credentials or model name refused it; the
+Windows `dsh` cells are blocked because that agent is not installed there, which is what the
+verdict says rather than a failure.
