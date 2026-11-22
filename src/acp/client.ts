@@ -179,10 +179,13 @@ export class AcpClient extends EventEmitter<AcpEvents> {
     // Strip anything that would make the agent try to phone home during tests.
     env.NO_COLOR = env.NO_COLOR ?? '1';
 
-    this.child = spawn(options.command, options.args ?? [], {
+    const spec = launchSpec(options.command, options.args ?? []);
+    this.child = spawn(spec.file, spec.args, {
       cwd: options.cwd,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
+      // Verbatim only for the `cmd.exe` form: our own quoting must reach it unchanged.
+      windowsVerbatimArguments: spec.verbatim,
       // Its own process group on POSIX, so dispose can kill the whole tree. An agent
       // that forks helpers (shells, watchers) used to leave them behind: `child.kill`
       // only reaches the direct child, and the survivors became `ppid=1` orphans that
@@ -990,6 +993,31 @@ export class AcpClient extends EventEmitter<AcpEvents> {
  * has nothing to do; `taskkill /T` is the tree walk. `/F` is the force step: the
  * SIGKILL pass uses it, the SIGTERM pass lets the app close first.
  */
+/**
+ * How to launch the agent command on this platform.
+ *
+ * ★ On Windows a global npm install is a `.cmd` shim (`opencode.cmd`), and `spawn` cannot
+ * execute one: the call fails with `ENOENT` even though the command is right there on PATH.
+ * Measured on a Windows 11 VM — `opencode acp` is a real, documented agent command and the
+ * bridge could not start it at all (`spawn opencode ENOENT`), which reached the user as
+ * "agent exited: ACP connection closed" with no hint about the cause.
+ *
+ * The fix is `cmd /d /s /c` with `windowsVerbatimArguments`, the same shape `printHelp()`
+ * uses and for the same reasons: `shell: true` would re-parse the line and mangle a path
+ * with spaces, while the verbatim form passes our quoting through untouched. Only used when
+ * the command actually needs it — an `.exe` agent keeps the direct spawn.
+ */
+function launchSpec(command: string, args: string[]): { file: string; args: string[]; verbatim: boolean } {
+  if (process.platform !== 'win32') return { file: command, args, verbatim: false };
+  // A `.cmd`/`.bat` (or a bare name, which PATH may resolve to one) has to go through cmd.
+  const needsShell = !/\.[A-Za-z0-9]+$/.test(command) || /\.(cmd|bat)$/i.test(command);
+  if (!needsShell) return { file: command, args, verbatim: false };
+  const quote = (value: string): string => (/\s/.test(value) ? `"${value}"` : value);
+  const line = [quote(command), ...args.map(quote)].join(' ');
+  // The outer pair is cmd's own escaping rule for `/s /c`: everything inside is verbatim.
+  return { file: 'cmd.exe', args: ['/d', '/s', '/c', `"${line}"`], verbatim: true };
+}
+
 export function windowsKillArgs(pid: number, signal: NodeJS.Signals): string[] {
   return ['/PID', String(pid), '/T', ...(signal === 'SIGKILL' ? ['/F'] : [])];
 }
