@@ -164,6 +164,9 @@ pnpm verify:version 2.0.27  # the same gate against a given opencode v2 release 
                   #   without touching your ~/.opencode; latest-v2 = the newest >=2.0.0 on npm)
 pnpm e2e          # = bash scripts/e2e-smoke.sh  fake agent + real HTTP, 20 scenarios
 pnpm e2e:entry    # = bash scripts/e2e-entry.sh  the single entry point: start the TUI, exit code, zero leftovers
+pnpm e2e:protocol # = node scripts/e2e-protocol.mjs  ★ the ONLY end-to-end check that runs on Windows
+                  #   (no bash, no tmux): ready line → session → turn → real catalog, not the
+                  #   acp/default placeholder → model switch → interrupt shape
 pnpm e2e:agent    # = bash scripts/e2e-real-agent.sh  a real agent (AGENT=<command> is mandatory; no prompt by default)
 pnpm e2e:tui      # = bash scripts/e2e-real-tui.sh    the real opencode v2 TUI (tmux): assert against the screen + reload history
                   #   the MODE=cancel mode exercises the cancel gesture (it hangs the agent on purpose; the real Escape must be pressed twice)

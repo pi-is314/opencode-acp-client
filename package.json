@@ -43,7 +43,8 @@
     "e2e:epilogue": "bash scripts/e2e-epilogue.sh",
     "e2e:dsh-acp": "bash scripts/e2e-dsh-acp.sh",
     "prepack": "pnpm build",
-    "prepare": "node scripts/prepare.mjs"
+    "prepare": "node scripts/prepare.mjs",
+    "e2e:protocol": "node scripts/e2e-protocol.mjs"
   },
   "engines": {
     "node": ">=20"
