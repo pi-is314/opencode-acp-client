@@ -150,6 +150,16 @@ pnpm verify:version 2.0.27  # 同一套门控跑在指定 opencode v2 release �
                   #   不碰你的 ~/.opencode；latest-v2 = npm 上最新的 >=2.0.0）
 pnpm e2e          # = bash scripts/e2e-smoke.sh  假 agent + 真 HTTP，20 个场景
 pnpm e2e:entry    # = bash scripts/e2e-entry.sh  单入口：起 TUI、退出码、零残留
+pnpm e2e:todo:win # = node scripts/e2e-todo-windows.mjs  ★ Windows 版的 MODE=todo（那边没有 tmux）
+                  #   用 node-pty 代替 tmux，在抓到的画面上断言 v2.1 的 todo 侧栏。
+                  #   v2.0 上跳过（与 bash 版一致）；非 Windows 上什么都不做。
+pnpm e2e:matrix   # = node scripts/e2e-matrix-real.mjs  ★ TUI 构建 × 真实 agent，每格三轮真实对话；
+                  #   判定看 transcript + ACP 错误原文，**不看截屏**。**花 token。**三平台都能跑（不需要 tmux）。
+pnpm e2e:conversation # = node scripts/e2e-real-conversation.mjs -- <agent>  单个 agent 三轮，
+                  #   手动查某个 agent 时用。**花 token。**
+pnpm e2e:protocol # = node scripts/e2e-protocol.mjs  ★ 唯一能在 Windows 上跑的端到端检查
+                  #   （不需要 bash、不需要 tmux）：ready 行 → 会话 → 回合 → 真实目录
+                  #   （不是 acp/default 占位）→ 模型切换 → 打断的应答形状
 pnpm e2e:agent    # = bash scripts/e2e-real-agent.sh  真实 agent（必须 AGENT=<命令>；默认不发 prompt）
 pnpm e2e:tui      # = bash scripts/e2e-real-tui.sh    真 opencode v2 TUI（tmux）：按屏幕断言 + 重载历史
                   #   MODE=cancel 那个模式查取消手势（自动把 agent 挂住；真的 Escape 要按两次）
@@ -379,6 +389,11 @@ pnpm e2e:dsh-acp # = bash scripts/e2e-dsh-acp.sh  ★ 真 agent 全功能验收�
   `~/.dsh/sessions-archived-bridge-tests-<时间戳>/`，并写 inventory JSON（与使用者自己的
   `sessions-archived-*` 惯例一致）；判定只收**测试工作区**（tmp/e2e 目录）和**今天创建的
   空会话或含测试标记的会话**，真实会话一律不碰。
+- ★ **`pnpm add @opencode/cli` 会留下一个空壳，`existsSync` 分辨不出来**。pnpm 12 默认跳过这个包的
+  postinstall，而 postinstall 正是把真正约 200 MB 的二进制拷进来的步骤——剩下的是一个 229 字节的壳：
+  文件**存在**，只在执行时才失败（Windows 上是 `not a valid Win32 application`）。安装前先在
+  `package.json` 同级放一个 `pnpm-workspace.yaml` 写 `allowBuilds: {'@opencode/cli': true}`，
+  并且**看体积，不要只看存在**。
 - ★ **临时探针结束后必须核对孤儿进程**：
   ```bash
   ps aux | grep -E "dist/index.js|bin/dsh --profile|fake-acp-agent"

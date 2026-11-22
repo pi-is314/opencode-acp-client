@@ -208,6 +208,8 @@ export OPENCODE_CONFIG_DIR="$TUI_CONFIG_DIR"
 migrate. Write both so the pin holds on releases either side.
 ★ What is pinned is the **harness's** preference, not product behaviour — a user who prefers the
 summary keeps it.
+★ **"export it" is not enough**: a script has to *own* this directory, or it is measuring the
+operator's config (see #10 — the same rule, and it cost a whole 4-version grid).
 
 ---
 
@@ -219,6 +221,163 @@ that session in the map?" — **deleted with the workspace**.
 **Do**: `KEEP=1` keeps it, and the failure path prints where.
 
 ---
+
+## 10. ★★ A probe that only OPENS a picker can still change what you measure
+
+**Symptom**: the matrix graded `opencode acp` **BLOCKED** on opencode v2.1.4 with
+`Error: Internal error: No permission to use model 'deepseek-v4-flash-inhouse-yd'`, while the
+same command answers correctly when run by hand.
+
+**Cause**: `feature_probes` step (b) opens `/model` and presses Escape without choosing. The
+TUI's model choice is **global**, not per session, and the picker filters by **prefix**. The
+order is the picker's own, not the config's: in the config this provider lists 40 models with
+`MiniMax-M3` first and `deepseek-flash` at position 14, while the picker sorts them its own way
+and opens on a different entry. Pressing Enter with nothing selected therefore lands on whichever
+model sorts first — **not** the one the config names (here a sibling model on the same
+provider, which the account had no access to), and the
+turn failed there. Measured in **4 of 4** full runs plus a single-cell run.
+...
+⚠️ The exact position depends on the picker's sort and on which models a machine can see, so do
+not quote a number in a test — the rule is "the first row is not your configured model".
+
+**Why it misleads**: the verdict reads "the agent's credentials are wrong". The agent never ran
+— there is not one `[acp] [agent]` line in the log; the error is the TUI's own model plumbing.
+A dropped probe therefore buys three wrong `BLOCKED` cells, one per version.
+
+**Cause, deeper — and the part that made a whole 4-version grid meaningless**: the matrix did
+**not** apply #8. `OPENCODE_CONFIG_DIR` was unset, so the TUI under test read the owner's
+`~/.config/opencode/opencode.json`, and the model — `deepseek-v4-flash-inhouse-yd`, the one at
+index 0 — came from there. Measured: give the matrix a private config dir and the same
+`opencode acp` cell **passes on v2.1.4** (isolated, the agent advertises 13 of its own models,
+`currentValue: opencode/tidepool-alpha-free`); under the owner's config it fails on **all four**
+versions. A matrix that inherits the operator's config measures the operator's config — on every
+version — and reports the result as the version's fault.
+
+**Do**: isolate the config dir **by default**, not behind a skip switch; a skip switch means the
+default stays wrong.
+
+```bash
+TUI_CONFIG_DIR="$WORK/tui-config"; mkdir -p "$TUI_CONFIG_DIR"
+printf '{"session":{"verbosity":"high"}}\n' > "$TUI_CONFIG_DIR/cli.json"
+printf '{"session":{"verbosity":"high"}}\n' > "$TUI_CONFIG_DIR/tui.json"
+export OPENCODE_CONFIG_DIR="$TUI_CONFIG_DIR"          # default; USE_REAL_TUI_CONFIG=1 opts out
+```
+
+**Why index 0 wins**: the picker filters by **prefix**, and a list whose first row is a model the
+operator is not authorized for turns any text typed into a filter into a selection of *that* row.
+With the isolated dir the first row is a model the agent can actually serve, so the same probe is
+harmless — but the rule still stands: **a probe that is not the subject of the assertion must not
+be able to mutate state.** `SKIP_MODEL_PROBE=1` exists for that and is otherwise unnecessary.
+
+★ The picker **writes `~/.config/opencode/tui.json`** — the owner's own file. Take a restore
+point before a matrix run and compare checksums after it (`openssl md5`), the same way a probe of
+a database is fenced. Measured across this run's 4 sweeps: untouched, mtime `Oct 20 16:58`.
+
+---
+
+## 11. ★★ `esc interrupt` is not a completion test — it SCROLLS
+
+**Symptom**: one full matrix run reported three cells as "the turn never finished (esc interrupt
+still up after ~4min)". The panes saved **2 seconds later** contained **zero** `esc interrupt`
+(1856 bytes for qwen, 2529 for gemini) and the agent's own error row was right there.
+
+**Cause**: the wait loop checked `grep -q 'esc interrupt'` **first** and only looked for the
+reply inside `if ! … esc interrupt …`. The hint is one row, and it scrolls out of a 42-row pane
+the moment the error row wraps — so a **finished** turn never satisfied the terminator and the
+loop ran its full 150 × 2 s.
+
+**Do**: order the loop's tests **outcome first, busy second, dead third**, and never `continue`
+on "hint present" alone — both its presence and its absence are unreliable once the pane is full.
+
+```bash
+# 1. the agent's own answer (its echo excluded, see 13)
+if printf '%s' "$body" | grep -v "Reply with exactly" | grep -q 'MATRIX_OK\|Authentication required'; then
+  done_turn=1; break
+fi
+# 2. the TUI is busy: wait. Absence of the hint is NOT a verdict on its own.
+printf '%s' "$body" | grep -q 'esc interrupt' && continue
+# 3. our own bridge error: the agent never came up
+if printf '%s' "$body" | grep -q 'could not start the agent\|agent exited'; then dead=1; break; fi
+```
+
+★ A failure message must also report what was **observed** (`TUI busy: no`), not what the script
+expected — "esc interrupt still up" was measurably false for every cell it cost a run, and that
+wording sends the next reader to the wrong component.
+
+---
+
+## 12. ★ Our own error row matches "the agent answered"
+
+**Symptom**: a cell whose agent process had **died** was graded "✓ the reply rendered on screen".
+
+**Cause**: the success test was `grep -q 'MATRIX_OK\|Authentication required\|Error:'`, and our own
+bridge row reads `Error: could not start the agent: agent exited: ACP connection closed`. The dead
+agent matched **our** `Error:` and the cell passed. The `error` arm had the same hole one word over:
+a dead agent was reported as **BLOCKED**, i.e. as the agent's credentials.
+
+**Do**: exclude our own strings before matching the agent's, and test `dead` first as a **FAIL**
+of its own — corroborated from the log, which the bridge writes independently of any rendering:
+
+```bash
+if grep -aq 'agent exited code=' "$log"; then fail "$name: the agent process did not come up"; fi
+```
+
+**Rule**: `Error:` alone never means "the agent replied". The narrow, real shape is
+`Authentication required` / the agent's own API error, and every other `Error:` deserves a look at
+whose row it is.
+
+---
+
+## 13. ★ The prompt's echo counts as the answer — and tmux has no `/usr/sbin`
+
+**Symptom (a)**: "the reply rendered on screen" on a pane where `MATRIX_OK` appeared **only** in
+the composer and in the user row we typed. **Cause**: the needle is literally the prompt text.
+
+**Do**: drop the echo before every reply assertion — `grep -v "Reply with exactly"`.
+
+**Symptom (b)**: `gemini --acp` died at startup with
+`uncaught Error: spawnSync sysctl ENOENT`, before any session existed, and the cell's failure
+looked like a TUI, model or version problem.
+
+**Cause**: tmux ran with `…:/usr/local/bin:/usr/bin:/bin` — **no `/usr/sbin`**, where `sysctl`
+lives. Not the agent's credentials, and nothing to do with opencode: the agent was launched into an
+environment that could not start it.
+
+**Do**: append the system sbin directories in the script, and make the launch environment part of
+the evidence.
+
+```bash
+case ":$PATH:" in *":/usr/sbin:"*) ;; *) PATH="$PATH:/usr/sbin" ;; esac
+case ":$PATH:" in *":/sbin:"*) ;; *) PATH="$PATH:/sbin" ;; esac
+export PATH
+```
+
+★ On any "the agent exited" symptom, print **the PATH it was launched with** before blaming the
+agent. Here the agent's own stderr said exactly what was missing; nobody read it for an hour
+because the cell's verdict was already "blocked".
+
+---
+
+## 14. ★★ Wait for a NEW row by ID, not by count — and do not exclude the agent you ship
+
+**Symptom**: turn 3 ("which word did I ask for last message?") answered with turn 1's text, and a
+model that had obviously remembered was graded as having forgotten.
+
+**Cause**: the wait loop counted completed assistant rows and returned the *newest* one it found.
+Two independent mistakes met there: the bridge can **complete an existing row** instead of
+appending one, so the count never grows and the loop falls through to whatever is there; and the
+API returns newest-first, so "the last element" is the *oldest* row. Track row **ids** against the
+set that existed before the prompt, and take the first id that is new and done.
+
+**Second mistake, same family**: the matrix excluded `opencode acp` from its agent list, reasoning
+"it is the TUI's own binary, so the version axis covers it". It does not — the agent command is
+built from the binary the version selects, so `2.0.32 × opencode` is a 2.0.32 ACP server driven by
+a 2.0.32 TUI, which is the combination the product ships. Leaving it out was blind in exactly the
+place that mattered: v2.0.18's ACP cannot see a provider from `opencode.json`, v2.0.32 can, and
+nothing in the grid would have said so. **The agent your product launches is a cell.**
+
+**Rule**: a wait condition on a growing list must name the element (id), not its arrival order. A
+matrix must include the agent the product starts by default.
 
 ## Self-check
 

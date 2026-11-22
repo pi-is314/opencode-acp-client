@@ -172,7 +172,78 @@ What is implemented and tested for Windows:
 - the agent is spawned without `detached` (a detached Windows child would open a new
   console window).
 
-One known gap: npm installs the `opencode` CLI as a `.cmd` shim on Windows, and Node cannot
-launch `.bat`/`.cmd` with `execFile` (it needs a shell), so the version probe's spawn
-path is covered on POSIX only — its spawn-based fixtures are `skipIf(win32)`, not
-silently green.
+**A `.cmd` shim is not a program on Windows.** npm installs the `opencode` CLI as
+`opencode.cmd`, and `execFile`/`spawn` without a shell cannot launch one — they answer
+`ENOENT` (or `EINVAL` through a pseudo-terminal) even though the command is right there on
+`PATH`. Every place that starts a binary goes through `cmd.exe /d /s /c` there: the version
+probe (`runVersion`), `printHelp()` and the ACP client's own agent launch (`launchSpec`).
+The fixtures that cover this are real `.cmd` shims, so the Windows path is exercised by the
+suite rather than skipped — measured: 432 passed / 0 skipped on Windows.
+
+### `opencode acp` ignores `provider` before v2.0.32
+
+A provider declared in `opencode.json` is visible to the TUI and to `opencode models` on
+**every** v2 release, but `opencode acp` resolved its model list from the built-in providers
+only on `v2.0.18`: `session/new` answered with 2 choices (`deepseek/*`) and no
+the configured provider, and `session/set_config_option` refused the configured id with
+`model not found`. Measured across five binaries on one machine, same config:
+
+| binary | `configOptions.model` |
+|---|---|
+| v2.0.18 | 2 choices, **0** from the config's provider |
+| v2.0.32 / v2.1.4 / v2.2.7 / v2.3.2 | 53 choices, **40** from the config's provider |
+
+So an agent pointed at a custom provider needs `v2.0.32` or newer. Nothing here can fix it —
+the model resolution happens inside `opencode`'s ACP subcommand, before the bridge is told
+anything.
+
+### The verified grid
+
+`node scripts/e2e-matrix-real.mjs` runs every TUI build it can find × every agent it can find,
+one three-turn conversation each, through the HTTP surface the TUI uses. It grades from the
+transcript plus the agent's own error text, not from a captured screen — the screen shows
+`Error: Internal error` for an agent whose real error is inside the ACP payload.
+
+Result on 2026-11-22, against a single OpenAI-compatible endpoint, every cell a real conversation
+that had to recall an earlier turn:
+
+| platform | builds | result |
+|---|---|---|
+| macOS | 2.0.32, 2.1.4, 2.2.7, 2.3.2 | **20/20** |
+| Linux | 2.0.32, 2.1.4, 2.2.7, 2.3.2 | **20/20** |
+| Windows | 2.0.32, 2.1.4, 2.2.7, 2.3.2 | **20/20** |
+
+Every row is 4 builds × 5 agents (`opencode acp`, claude-agent-acp, codex-acp, qwen,
+`dsh --profile acp`).
+
+`opencode acp` is a row per build because the agent command IS that build's binary — see
+E2E-PITFALLS #14. Nothing is reported as blocked: an agent that is missing from a machine gets
+installed rather than recorded as unable to run. The first Windows run said "dsh blocked (not
+installed)", which was the harness describing its own gap as the agent's problem — see the note
+on `dsh` below.
+
+### Two things a second platform found
+
+**`dsh` hardcodes its provider.** `dsh --profile acp` reads the LLM route from its profile, but the
+`@deepseek-ai/dsh-acp` bundle names a provider of its own, so a profile that only declares a
+provider leaves the agent answering `no API key for provider route "deepseek-official"` — the
+route it was going to use, not the one that was configured. The override has to name the bundle:
+
+```yaml
+- id: acp
+  name: "@deepseek-ai/dsh-acp"
+  config:
+    provider: my-llm         # the provider id declared under llm-pi-ai
+    model: "deepseek-flash"
+```
+
+**`pnpm` builds an empty `opencode.exe`.** pnpm 12 skips `@opencode/cli`'s postinstall by default,
+and that postinstall is what copies the real 200 MB binary into place — what remains is a 229-byte
+stub. It still exists, so `existsSync` passes and the failure only shows up when it runs. Allow the
+build before installing:
+
+```yaml
+# pnpm-workspace.yaml, next to package.json
+allowBuilds:
+  '@opencode/cli': true
+```

@@ -89,13 +89,26 @@ export async function readOpenCodeVersion(
 }
 
 function runVersion(command: string, timeoutMs: number): Promise<string | undefined> {
+  // ★ On Windows a global npm install is a `.cmd` shim, and `execFile` cannot run one: the
+  // call failed with `EINVAL`, which surfaced as `oc-acp-client: spawn EINVAL` and killed the
+  // bridge before it served a single request — with `OPENCODE_BIN` pointing straight at
+  // `opencode.cmd`, the most natural way to configure it there. Go through `cmd.exe`, the
+  // same shape `printHelp()` and `launchSpec()` use.
+  const viaCmd = process.platform === 'win32' && /\.(cmd|bat)$/i.test(command);
+  const file = viaCmd ? 'cmd.exe' : command;
+  const args = viaCmd ? ['/d', '/s', '/c', `""${command}" --version"`] : ['--version'];
   return new Promise((resolve) => {
-    execFile(command, ['--version'], { timeout: timeoutMs }, (err, stdout, stderr) => {
-      // A non-zero exit with version output is still usable; a spawn failure is not.
-      const text = `${stdout}${stderr}`.trim();
-      if (text) resolve(text);
-      else resolve(err ? undefined : text);
-    });
+    execFile(
+      file,
+      args,
+      { timeout: timeoutMs, ...(viaCmd ? { windowsVerbatimArguments: true } : {}) },
+      (err, stdout, stderr) => {
+        // A non-zero exit with version output is still usable; a spawn failure is not.
+        const text = `${stdout}${stderr}`.trim();
+        if (text) resolve(text);
+        else resolve(err ? undefined : text);
+      },
+    );
   });
 }
 

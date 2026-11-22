@@ -27,7 +27,7 @@
  * there is no flag for it.
  */
 
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { accessSync, constants, createWriteStream, mkdtempSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -830,7 +830,24 @@ export function printHelp(): void {
   let forwarded: Array<[string, string]> = [];
   try {
     const binary = resolveOpenCodeBinary();
-    const raw = execFileSync(binary.path, ['--help'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    // ★ Windows cannot exec a `.cmd`/`.bat` without a shell, and that is how npm installs
+    // `opencode` there — `execFileSync` answered ENOENT, which the `catch` below turned into
+    // an empty forwarded flag list, so `--help` silently lost its whole forwarded section
+    // (measured on windows-latest and again on a real Windows 11 VM). `cmd /d /s /c` with
+    // `windowsVerbatimArguments` keeps the quoting intact; `shell: true` would re-parse the
+    // line and break a path containing spaces. `spawnSync` because `execFileSync`'s typings
+    // do not carry that option.
+    const run = process.platform === 'win32'
+      ? spawnSync('cmd.exe', ['/d', '/s', '/c', `""${binary.path}" --help"`], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          windowsVerbatimArguments: true,
+        })
+      : spawnSync(binary.path, ['--help'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    if (run.error) throw run.error;
+    // CRLF first: `.split('\n')` on a Windows answer leaves a `\r` on every line, and
+    // `/^(FLAGS|GLOBAL FLAGS)$/m` then never matches.
+    const raw = String(run.stdout ?? '').replace(/\r\n/g, '\n');
     const cut = raw.search(/^SUBCOMMANDS\s*$/m);
     const body = cut >= 0 ? raw.slice(0, cut) : raw;
     const firstHeading = body.search(/^(FLAGS|GLOBAL FLAGS)\s*$/m);
