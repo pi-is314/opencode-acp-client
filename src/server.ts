@@ -2582,7 +2582,31 @@ export class BridgeServer {
     if (id === '' || id === 'default') return false;
     return typeof model['modelID'] === 'string' || typeof model['id'] === 'string';
   }
+  /**
+   * The model the agent's own config state names, if it advertises one.
+   *
+   * `configOptionsFor` is what `session/new`, `session/load` and every
+   * `config_option_update` keep current, so it is the agent's answer to "what are you on" —
+   * unlike the catalog, whose order says nothing.
+   */
+  private reportedModelFor(record: SessionRecord): { providerID: string; modelID: string } | undefined {
+    const agent = this.agents.get(record.session.id);
+    const options = agent?.configOptionsFor(record.acpSessionId);
+    return options ? modelFromConfigOptions(options) : undefined;
+  }
+
   private defaultModelFor(record?: SessionRecord): { providerID: string; modelID: string } | undefined {
+    // ★ What the AGENT says it is on wins over "the first real entry in the list".
+    //
+    // The catalog is a menu, and its order is the agent's own — it is not a statement about
+    // which entry is running. With `opencode acp` the list begins with `opencode/beam-free`
+    // while `session/new` reports
+    // `currentValue: "builtin-codemaker/deepseek-flash"`, so every assistant message was
+    // stamped with a model that never answered (measured: the reply was correct and the
+    // recorded model was wrong). A user reading the footer, or a transcript reloaded later,
+    // was told the wrong thing.
+    const reported = record ? this.reportedModelFor(record) : undefined;
+    if (reported) return reported;
     const entry = (record ? this.modelCatalog(record).models : this.modelCatalog().models).find((model) =>
       this.isRealModel(model),
     );
