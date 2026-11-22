@@ -179,11 +179,39 @@ shell 的 `execFile`/`spawn` 起不了它——即使命令就在 `PATH` 上，�
 
 2026-11-22 的结果，全部指向同一个 OpenAI 兼容端点，每一格都是**必须回忆起上一轮**的真实对话：
 
-| 平台 | 构建 | agent | 结果 |
-|---|---|---|---|
-| macOS | 2.0.32 / 2.1.4 / 2.2.7 / 2.3.2 | `opencode acp`、claude-agent-acp、codex-acp、qwen、`dsh --profile acp` | **20/20** |
-| Linux | 2.0.32 / 2.1.4 / 2.2.7 / 2.3.2 | 同上五个 | **20/20** |
-| Windows | 2.0.32 / 2.1.4 / 2.3.2 | 同上五个，但没装 `dsh` | **12 通过，3 BLOCKED** |
+| 平台 | 构建 | 结果 |
+|---|---|---|
+| macOS | 2.0.32 / 2.1.4 / 2.2.7 / 2.3.2 | **20/20** |
+| Linux | 2.0.32 / 2.1.4 / 2.2.7 / 2.3.2 | **20/20** |
+| Windows | 2.0.32 / 2.1.4 / 2.2.7 / 2.3.2 | **20/20** |
 
-`opencode acp` 是按构建逐行测的，因为 agent 命令**就是那个构建的二进制**——见 E2E-PITFALLS #14。BLOCKED
-表示 agent 自己的凭证或模型名把它拒了；Windows 上的 `dsh` 是那台机器没装它，判定如实这么说，而不是算失败。
+每一行都是 4 个构建 × 5 个 agent（`opencode acp`、claude-agent-acp、codex-acp、qwen、
+`dsh --profile acp`）。
+
+`opencode acp` 是按构建逐行测的，因为 agent 命令**就是那个构建的二进制**——见 E2E-PITFALLS #14。
+没有任何一格被记成 BLOCKED：某台机器上缺的 agent 要**装上**，而不是记成"跑不了"。Windows 第一次跑
+时记的 "dsh blocked（未安装）"，是测试脚本把自己的缺口描述成了 agent 的问题——见下面的 `dsh` 说明。
+
+### 换一个平台才发现的两次
+
+**`dsh` 把 provider 写死在 bundle 里。** `dsh --profile acp` 从 profile 读 LLM 路由，但
+`@deepseek-ai/dsh-acp` 这个 bundle 自己指定了 provider，所以只声明了 provider 的 profile 仍然会得到
+`no API key for provider route "deepseek-official"`——它要用的是那个路由，不是配置里的。覆盖必须点名 bundle：
+
+```yaml
+- id: acp
+  name: "@deepseek-ai/dsh-acp"
+  config:
+    provider: my-llm         # llm-pi-ai 下声明的 provider id
+    model: "deepseek-flash"
+```
+
+**`pnpm` 会留下一个空的 `opencode.exe`。** pnpm 12 默认跳过 `@opencode/cli` 的 postinstall，而那个
+postinstall 正是把真正的 200 MB 二进制拷进来的步骤——留下的是一个 229 字节的壳。文件**存在**，所以
+`existsSync` 会通过，问题只在真正运行它时才暴露。安装前先允许构建：
+
+```yaml
+# 放在 package.json 同级的 pnpm-workspace.yaml
+allowBuilds:
+  '@opencode/cli': true
+```

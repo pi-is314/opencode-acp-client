@@ -389,6 +389,11 @@ pnpm e2e:dsh-acp # = bash scripts/e2e-dsh-acp.sh  ★ 真 agent 全功能验收�
   `~/.dsh/sessions-archived-bridge-tests-<时间戳>/`，并写 inventory JSON（与使用者自己的
   `sessions-archived-*` 惯例一致）；判定只收**测试工作区**（tmp/e2e 目录）和**今天创建的
   空会话或含测试标记的会话**，真实会话一律不碰。
+- ★ **`pnpm add @opencode/cli` 会留下一个空壳，`existsSync` 分辨不出来**。pnpm 12 默认跳过这个包的
+  postinstall，而 postinstall 正是把真正约 200 MB 的二进制拷进来的步骤——剩下的是一个 229 字节的壳：
+  文件**存在**，只在执行时才失败（Windows 上是 `not a valid Win32 application`）。安装前先在
+  `package.json` 同级放一个 `pnpm-workspace.yaml` 写 `allowBuilds: {'@opencode/cli': true}`，
+  并且**看体积，不要只看存在**。
 - ★ **临时探针结束后必须核对孤儿进程**：
   ```bash
   ps aux | grep -E "dist/index.js|bin/dsh --profile|fake-acp-agent"

@@ -136,7 +136,14 @@ function discoverAgents() {
       id: 'qwen',
       command: adapter('@qwen-code/qwen-code', 'cli-entry.js', '--acp') ?? ['qwen', '--acp'],
     },
-    { id: 'dsh', command: ['dsh', '--profile', 'acp'] },
+    {
+      id: 'dsh',
+      // `dsh` is distributed as an npm package whose shim is a `.cmd` on Windows, which `spawn`
+      // cannot execute without a shell; prefer the real entry point when the package sits in the
+      // scratch prefix, and fall back to the command for a global install.
+      command:
+        adapter('@deepseek-ai/dsh', 'lib/bin.js', '--profile', 'acp') ?? ['dsh', '--profile', 'acp'],
+    },
   ];
   return candidates;
 }

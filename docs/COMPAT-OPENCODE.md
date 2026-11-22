@@ -207,13 +207,43 @@ transcript plus the agent's own error text, not from a captured screen — the s
 Result on 2026-11-22, against a single OpenAI-compatible endpoint, every cell a real conversation
 that had to recall an earlier turn:
 
-| platform | builds | agents | result |
-|---|---|---|---|
-| macOS | 2.0.32, 2.1.4, 2.2.7, 2.3.2 | `opencode acp`, claude-agent-acp, codex-acp, qwen, `dsh --profile acp` | **20/20** |
-| Linux | 2.0.32, 2.1.4, 2.2.7, 2.3.2 | same five | **20/20** |
-| Windows | 2.0.32, 2.1.4, 2.3.2 | same five, `dsh` not installed | **12 pass, 3 blocked** |
+| platform | builds | result |
+|---|---|---|
+| macOS | 2.0.32, 2.1.4, 2.2.7, 2.3.2 | **20/20** |
+| Linux | 2.0.32, 2.1.4, 2.2.7, 2.3.2 | **20/20** |
+| Windows | 2.0.32, 2.1.4, 2.2.7, 2.3.2 | **20/20** |
+
+Every row is 4 builds × 5 agents (`opencode acp`, claude-agent-acp, codex-acp, qwen,
+`dsh --profile acp`).
 
 `opencode acp` is a row per build because the agent command IS that build's binary — see
-E2E-PITFALLS #14. A blocked cell is an agent whose own credentials or model name refused it; the
-Windows `dsh` cells are blocked because that agent is not installed there, which is what the
-verdict says rather than a failure.
+E2E-PITFALLS #14. Nothing is reported as blocked: an agent that is missing from a machine gets
+installed rather than recorded as unable to run. The first Windows run said "dsh blocked (not
+installed)", which was the harness describing its own gap as the agent's problem — see the note
+on `dsh` below.
+
+### Two things a second platform found
+
+**`dsh` hardcodes its provider.** `dsh --profile acp` reads the LLM route from its profile, but the
+`@deepseek-ai/dsh-acp` bundle names a provider of its own, so a profile that only declares a
+provider leaves the agent answering `no API key for provider route "deepseek-official"` — the
+route it was going to use, not the one that was configured. The override has to name the bundle:
+
+```yaml
+- id: acp
+  name: "@deepseek-ai/dsh-acp"
+  config:
+    provider: my-llm         # the provider id declared under llm-pi-ai
+    model: "deepseek-flash"
+```
+
+**`pnpm` builds an empty `opencode.exe`.** pnpm 12 skips `@opencode/cli`'s postinstall by default,
+and that postinstall is what copies the real 200 MB binary into place — what remains is a 229-byte
+stub. It still exists, so `existsSync` passes and the failure only shows up when it runs. Allow the
+build before installing:
+
+```yaml
+# pnpm-workspace.yaml, next to package.json
+allowBuilds:
+  '@opencode/cli': true
+```

@@ -426,6 +426,11 @@ pnpm e2e:dsh-acp # = bash scripts/e2e-dsh-acp.sh  ★ full acceptance against a 
   test workspaces (tmp/e2e cwd) and today's empty or test-marker sessions; real sessions are
   never touched.
   verbs that really delete data.
+- ★ **`pnpm add @opencode/cli` leaves a stub, and `existsSync` cannot tell.** pnpm 12 skips the
+  package's postinstall by default; that postinstall is what copies the real ~200 MB binary in,
+  so the file is a 229-byte shim that exists and fails only when executed (`not a valid Win32
+  application` on Windows). Allow the build in a `pnpm-workspace.yaml` beside `package.json`
+  (`allowBuilds: {'@opencode/cli': true}`) before installing, and check the size, not existence.
 - ★ **Always check for orphaned processes after an ad-hoc probe**:
   ```bash
   ps aux | grep -E "dist/index.js|bin/dsh --profile|fake-acp-agent"
