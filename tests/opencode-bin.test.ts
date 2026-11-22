@@ -1,6 +1,6 @@
 import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { afterAll, describe, expect, it } from 'vitest';
 
@@ -29,9 +29,30 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }));
 // The Windows shim path is a documented gap (docs/COMPAT-OPENCODE.md), not a
 // silent skip.
 let seq = 0;
+/**
+ * A fake `opencode` that prints `output` and exits `exitCode`.
+ *
+ * ★ Portable on purpose. It used to be a `#!/bin/sh` script, which Windows cannot execute at
+ * all — `execFileSync` answers ENOENT — so seven tests were marked `skipIf(win32)` and the
+ * ONE platform where the launcher is most fragile had no coverage. After `runVersion()`
+ * gained its `.cmd` branch there was even less: the new code path could not be exercised
+ * anywhere the suite runs.
+ *
+ * Now the payload is a Node script and the launcher is whatever the platform needs: a `.cmd`
+ * shim on Windows (exactly the shape an npm global install produces, which is the case that
+ * broke), a `#!/bin/sh` wrapper elsewhere.
+ */
 function fakeBinary(output: string, exitCode = 0): string {
-  const path = join(dir, `fake-opencode-${seq++}`);
-  writeFileSync(path, `#!/bin/sh\nprintf '%s\\n' '${output}'\nexit ${exitCode}\n`);
+  const base = join(dir, `fake-opencode-${seq++}`);
+  const script = `${base}.mjs`;
+  writeFileSync(script, `process.stdout.write(${JSON.stringify(output + '\\n')});\nprocess.exit(${exitCode});\n`);
+  if (process.platform === 'win32') {
+    const shim = `${base}.cmd`;
+    writeFileSync(shim, `@echo off\r\n"${process.execPath}" "%~dp0${basename(script)}" %*\r\n`);
+    return shim;
+  }
+  const path = `${base}`;
+  writeFileSync(path, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
   chmodSync(path, 0o755);
   return path;
 }
@@ -66,26 +87,26 @@ describe('resolveOpenCodeBinary', () => {
 });
 
 describe('readOpenCodeVersion', () => {
-  it.skipIf(process.platform === 'win32')('parses the standalone installer spelling', async () => {
+  it('parses the standalone installer spelling', async () => {
     const binary = fakeBinary('opencode v2.0.26');
     const version = await readOpenCodeVersion({ path: binary, source: 'env' });
     expect(version).toMatchObject({ major: 2, minor: 0, patch: 26, supported: true });
   });
 
-  it.skipIf(process.platform === 'win32')('parses the bare npm spelling', async () => {
+  it('parses the bare npm spelling', async () => {
     const binary = fakeBinary('1.14.40');
     const version = await readOpenCodeVersion({ path: binary, source: 'path' });
     expect(version).toMatchObject({ major: 1, minor: 14, patch: 40, supported: false });
   });
 
-  it.skipIf(process.platform === 'win32')('rejects v1, which speaks a different event vocabulary', async () => {
+  it('rejects v1, which speaks a different event vocabulary', async () => {
     const binary = fakeBinary('opencode v1.18.18');
     const version = await readOpenCodeVersion({ path: binary, source: 'path' });
     expect(version?.supported).toBe(false);
     expect(version?.major).toBeLessThan(MIN_MAJOR_VERSION);
   });
 
-  it.skipIf(process.platform === 'win32')('accepts a future major version', async () => {
+  it('accepts a future major version', async () => {
     const binary = fakeBinary('opencode v3.1.0');
     expect((await readOpenCodeVersion({ path: binary, source: 'path' }))?.supported).toBe(true);
   });
@@ -98,12 +119,12 @@ describe('readOpenCodeVersion', () => {
     expect(version).toBeUndefined();
   });
 
-  it.skipIf(process.platform === 'win32')('returns undefined when the output carries no version', async () => {
+  it('returns undefined when the output carries no version', async () => {
     const binary = fakeBinary('something went wrong');
     expect(await readOpenCodeVersion({ path: binary, source: 'path' })).toBeUndefined();
   });
 
-  it.skipIf(process.platform === 'win32')('still reads a version printed alongside a non-zero exit', async () => {
+  it('still reads a version printed alongside a non-zero exit', async () => {
     // Some wrappers print the version and exit 1; that is still better than
     // concluding "not installed".
     const binary = fakeBinary('opencode v2.0.26', 1);
@@ -117,7 +138,7 @@ describe('describeVersion', () => {
     expect(describeVersion({ path: 'opencode', source: 'path' }, undefined)).toContain('PATH');
   });
 
-  it.skipIf(process.platform === 'win32')('says unsupported rather than ok for v1', async () => {
+  it('says unsupported rather than ok for v1', async () => {
     const binary = fakeBinary('1.14.40');
     const version = await readOpenCodeVersion({ path: binary, source: 'path' });
     expect(describeVersion({ path: binary, source: 'path' }, version)).toContain('unsupported');

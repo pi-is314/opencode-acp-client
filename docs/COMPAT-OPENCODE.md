@@ -172,7 +172,27 @@ What is implemented and tested for Windows:
 - the agent is spawned without `detached` (a detached Windows child would open a new
   console window).
 
-One known gap: npm installs the `opencode` CLI as a `.cmd` shim on Windows, and Node cannot
-launch `.bat`/`.cmd` with `execFile` (it needs a shell), so the version probe's spawn
-path is covered on POSIX only — its spawn-based fixtures are `skipIf(win32)`, not
-silently green.
+**A `.cmd` shim is not a program on Windows.** npm installs the `opencode` CLI as
+`opencode.cmd`, and `execFile`/`spawn` without a shell cannot launch one — they answer
+`ENOENT` (or `EINVAL` through a pseudo-terminal) even though the command is right there on
+`PATH`. Every place that starts a binary goes through `cmd.exe /d /s /c` there: the version
+probe (`runVersion`), `printHelp()` and the ACP client's own agent launch (`launchSpec`).
+The fixtures that cover this are real `.cmd` shims, so the Windows path is exercised by the
+suite rather than skipped — measured: 432 passed / 0 skipped on Windows.
+
+### `opencode acp` ignores `provider` before v2.0.32
+
+A provider declared in `opencode.json` is visible to the TUI and to `opencode models` on
+**every** v2 release, but `opencode acp` resolved its model list from the built-in providers
+only on `v2.0.18`: `session/new` answered with 2 choices (`deepseek/*`) and no
+`builtin-codemaker`, and `session/set_config_option` refused the configured id with
+`model not found`. Measured across five binaries on one machine, same config:
+
+| binary | `configOptions.model` |
+|---|---|
+| v2.0.18 | 2 choices, **0** from the config's provider |
+| v2.0.32 / v2.1.4 / v2.2.7 / v2.3.2 | 53 choices, **40** from the config's provider |
+
+So an agent pointed at a custom provider needs `v2.0.32` or newer. Nothing here can fix it —
+the model resolution happens inside `opencode`'s ACP subcommand, before the bridge is told
+anything.

@@ -149,6 +149,24 @@ GitHub 在 Windows runner 上的默认 shell）。真 TUI 验收跑不了：它�
   `windowsKillArgs` 固定参数，进程树测试在 Windows 上也会跑；
 - 不启用 `detached`（Windows 上 detached 会弹出一个新控制台窗口）。
 
-一个已知缺口：npm 在 Windows 上装出的 `opencode` 是 `.cmd` shim，而 Node 不能用
-`execFile` 直接启动 `.bat`/`.cmd`（需要 shell），所以版本探测的 spawn 路径只在 POSIX
-上覆盖——相关 spawn 测试是 `skipIf(win32)`，不是静默变绿。
+**`.cmd` shim 在 Windows 上不算程序。** npm 装出来的 `opencode` 是 `opencode.cmd`，而不带
+shell 的 `execFile`/`spawn` 起不了它——即使命令就在 `PATH` 上，也只会回 `ENOENT`（走伪终端
+时是 `EINVAL`）。所以那里每一处启动二进制的地方都改走 `cmd.exe /d /s /c`：版本探测
+（`runVersion`）、`printHelp()`，以及 ACP 客户端自己的 agent 启动（`launchSpec`）。
+覆盖这几处的 fixture 是真的 `.cmd` shim，因此 Windows 路径是被测试**真跑到的**，不是跳过
+——实测：Windows 上 432 通过 / 0 跳过。
+
+### v2.0.32 之前，`opencode acp` 不认 `provider`
+
+写在 `opencode.json` 里的 provider，在**每个** v2 版本的 TUI 和 `opencode models` 里都能看到，
+但 `opencode acp` 的模型列表在 `v2.0.18` 上只从内置 provider 解析：`session/new` 只给出 2 个
+选项（`deepseek/*`），没有配置里的 `builtin-codemaker`，`session/set_config_option` 也以
+`model not found` 拒绝。同一台机器、同一份配置，五个二进制实测：
+
+| 二进制 | `configOptions.model` |
+|---|---|
+| v2.0.18 | 2 个选项，**0** 个来自配置的 provider |
+| v2.0.32 / v2.1.4 / v2.2.7 / v2.3.2 | 53 个选项，**40** 个来自配置的 provider |
+
+所以把 agent 指向自定义 provider，需要 `v2.0.32` 或更新。这里修不了——模型解析发生在
+`opencode` 的 ACP 子命令内部，在桥被告知任何东西之前。

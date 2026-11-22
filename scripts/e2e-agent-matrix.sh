@@ -12,6 +12,14 @@
 # as BLOCKED with the agent's own message, never as our regression: the bridge's
 # job is to carry the turn faithfully, including errors.
 #
+# Outcomes per cell: PASS, BLOCKED (the agent's own credentials/config), and —
+# since 2026-11-22 — `dead` as a FAIL: the agent PROCESS did not come up at all,
+# so no turn was possible. `dead` exists because this harness once graded a dead
+# agent as "the reply rendered": the old success test matched the broad `Error:`,
+# and our own bridge row reads `Error: could not start the agent: agent exited:
+# ACP connection closed`. Our errors are now excluded before the agent's are
+# looked for, in both the `reply` and the `error` arms.
+#
 # Environment quirks handled here, each measured (2026-10-17):
 #   - codex: the user's model list carries `"effort": "max"`, which the codex ACP
 #     adapter rejects at startup ("unknown variant `max`"). The cell runs with a
@@ -24,6 +32,16 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$HERE"
+# ★ The agents run inside tmux, and this harness's shell hands tmux a PATH that ends
+# at /bin — no /usr/sbin. Measured 2026-11-22: `gemini --acp` calls
+# `execFileSync('sysctl', ['-inq','sysctl.proc_translated'])` while starting, got
+# ENOENT, and died of an uncaught exception BEFORE any session existed. That looked
+# like a TUI/agent defect for an hour; it was a missing directory in PATH. The system
+# sbin directories are part of a normal macOS PATH, so the harness supplies them
+# rather than making every agent fight the environment it is launched in.
+case ":$PATH:" in *":/usr/sbin:"*) ;; *) PATH="$PATH:/usr/sbin" ;; esac
+case ":$PATH:" in *":/sbin:"*) ;; *) PATH="$PATH:/sbin" ;; esac
+export PATH
 OC="${OPENCODE_BIN:-$(command -v opencode || true)}"
 # The TUI's binary must be an absolute path: tmux runs a login shell whose PATH
 # may not carry it, and a missing OPENCODE_BIN turns the run into an install
@@ -140,7 +158,16 @@ EOF
   tmux send-keys -t "$session" "Reply with exactly: MATRIX_OK"
   sleep 1.6
   tmux send-keys -t "$session" Enter
-  local done_turn=0 body=''
+  # ★ The turn's OUTCOME, decided from the screen before it is graded. `dead` is
+  # new and separate on purpose (measured 2026-11-22, gemini): the old single test
+  # was `grep -q 'MATRIX_OK\|Authentication required\|Error:'`, and OUR OWN bridge
+  # error row reads `Error: could not start the agent: agent exited: ACP connection
+  # closed` — so a cell whose agent process had died before the turn was graded
+  # "the reply rendered on screen". A dead agent is neither a reply nor the agent's
+  # own credentials: it is a failure, and it must never be able to match the broad
+  # `Error:` arm, so it is tested FIRST and the match is required to be an outcome
+  # we did not write.
+  local done_turn=0 dead=0 body=''
   for _ in $(seq 1 150); do
     sleep 2
     body="$(tmux capture-pane -p -t "$session" 2>/dev/null)"
@@ -150,13 +177,33 @@ EOF
     # the hint alone). A turn is over when the hint is gone AND the outcome is
     # on screen: reply text, or the agent's own error.
     if ! printf '%s' "$body" | grep -q 'esc interrupt'; then
-      if printf '%s' "$body" | grep -q 'MATRIX_OK\|Authentication required\|Error:'; then
+      # Our own bridge error must never count as "the agent answered". A dead
+      # agent also leaves the spinner up, so the `esc interrupt` guard above can
+      # keep the loop going for the full ~4 minutes — hence this check sits
+      # INSIDE the loop and breaks out immediately.
+      if printf '%s' "$body" | grep -q 'could not start the agent\|agent exited'; then
+        dead=1
+        break
+      elif printf '%s' "$body" | grep -v "Reply with exactly" | grep -q 'MATRIX_OK\|Authentication required'; then
         done_turn=1
         break
       fi
     fi
   done
   save_pane "$name" "$session"
+  if [ "$dead" = 1 ]; then
+    # Corroborate on the log: the bridge prints `[acp] agent exited code=…` from its
+    # own child-process handler, which is independent of anything we rendered.
+    local reason
+    reason="$(grep -ao 'could not start the agent[^\n]*\|agent exited[^\n]*' <<<"$body" | head -1)"
+    if grep -aq 'agent exited code=' "$log" 2>/dev/null; then
+      fail "$name: the agent process did not come up ($reason; bridge log: $(grep -ao 'agent exited code=[0-9]*' "$log" | head -1)) — no turn was possible, so nothing else on this screen is evidence"
+    else
+      fail "$name: the agent process did not come up ($reason) — no turn was possible"
+    fi
+    tmux kill-session -t "$session" 2>/dev/null
+    return
+  fi
   if [ "$done_turn" != 1 ]; then
     fail "$name: the turn never finished (esc interrupt still up after ~4min)"
     tmux kill-session -t "$session" 2>/dev/null
@@ -166,7 +213,10 @@ EOF
 
   case "$outcome" in
   reply)
-    if printf '%s' "$body" | grep -q 'MATRIX_OK'; then
+    # ★ The prompt we typed ourselves is on screen too, so its echo must not count
+    # as the agent's answer: `grep -v "Reply with exactly"` drops the composer and
+    # the user row, and what remains is the agent's own text.
+    if printf '%s' "$body" | grep -v "Reply with exactly" | grep -q 'MATRIX_OK'; then
       ok "$name: the reply rendered on screen"
     else
       fail "$name: no reply text on screen"
@@ -175,12 +225,18 @@ EOF
   error)
     # The agent's own credentials/API are broken in this environment. Two shapes
     # are both acceptable evidence that OUR side carried it right:
-    #   (a) the agent's error reached the transcript (rendered on screen), or
+    #   (a) the agent's ERROR reached the transcript (rendered on screen), or
     #   (b) the agent failed before the turn could start — its own adapter log
     #       says so (codex measured: `401 Unauthorized` from its websocket) —
     #       and the bridge carried the session-creation failure faithfully.
-    if printf '%s' "$body" | grep -qiE 'Authentication required|Error:'; then
-      blocked "$name: the agent's own error rendered ($(printf '%s' "$body" | grep -oiE '(Error|Authentication)[^\n]{0,60}' | head -1))"
+    # ★ Our own row is excluded first: `Error: could not start the agent: agent
+    # exited: …` is the bridge reporting a DEAD PROCESS, which is not the agent's
+    # credentials. Matching it here turned a dead agent into a BLOCKED cell — the
+    # same false positive as the `reply` arm, one word over.
+    local agent_error
+    agent_error="$(printf '%s' "$body" | grep -v 'could not start the agent' | grep -oiE '(Error|Authentication)[^\n]{0,60}' | grep -viE 'agent exited|ACP connection closed' | head -1)"
+    if [ -n "$agent_error" ]; then
+      blocked "$name: the agent's own error rendered ($agent_error)"
     elif grep -qiE '401 Unauthorized|Authentication required|unauthorized|invalid api key' "$log" 2>/dev/null; then
       blocked "$name: the agent's own credential failure ($(grep -oiE '401 Unauthorized|Authentication required[^,]*|invalid api key' "$log" | head -1)) — it never reached a turn, so the screen has nothing to render"
     else
