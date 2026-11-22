@@ -150,6 +150,9 @@ pnpm verify:version 2.0.27  # 同一套门控跑在指定 opencode v2 release �
                   #   不碰你的 ~/.opencode；latest-v2 = npm 上最新的 >=2.0.0）
 pnpm e2e          # = bash scripts/e2e-smoke.sh  假 agent + 真 HTTP，20 个场景
 pnpm e2e:entry    # = bash scripts/e2e-entry.sh  单入口：起 TUI、退出码、零残留
+pnpm e2e:todo:win # = node scripts/e2e-todo-windows.mjs  ★ Windows 版的 MODE=todo（那边没有 tmux）
+                  #   用 node-pty 代替 tmux，在抓到的画面上断言 v2.1 的 todo 侧栏。
+                  #   v2.0 上跳过（与 bash 版一致）；非 Windows 上什么都不做。
 pnpm e2e:protocol # = node scripts/e2e-protocol.mjs  ★ 唯一能在 Windows 上跑的端到端检查
                   #   （不需要 bash、不需要 tmux）：ready 行 → 会话 → 回合 → 真实目录
                   #   （不是 acp/default 占位）→ 模型切换 → 打断的应答形状

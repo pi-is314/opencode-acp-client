@@ -164,6 +164,9 @@ pnpm verify:version 2.0.27  # the same gate against a given opencode v2 release 
                   #   without touching your ~/.opencode; latest-v2 = the newest >=2.0.0 on npm)
 pnpm e2e          # = bash scripts/e2e-smoke.sh  fake agent + real HTTP, 20 scenarios
 pnpm e2e:entry    # = bash scripts/e2e-entry.sh  the single entry point: start the TUI, exit code, zero leftovers
+pnpm e2e:todo:win # = node scripts/e2e-todo-windows.mjs  ★ MODE=todo for Windows (no tmux there)
+                  #   node-pty stands in for tmux; asserts the v2.1 todo sidebar on the
+                  #   captured pane. Skips on v2.0 like the bash mode; no-ops off Windows.
 pnpm e2e:protocol # = node scripts/e2e-protocol.mjs  ★ the ONLY end-to-end check that runs on Windows
                   #   (no bash, no tmux): ready line → session → turn → real catalog, not the
                   #   acp/default placeholder → model switch → interrupt shape

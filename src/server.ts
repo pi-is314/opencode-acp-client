@@ -2599,12 +2599,11 @@ export class BridgeServer {
     // ★ What the AGENT says it is on wins over "the first real entry in the list".
     //
     // The catalog is a menu, and its order is the agent's own — it is not a statement about
-    // which entry is running. With `opencode acp` the list begins with `opencode/beam-free`
-    // while `session/new` reports
-    // `currentValue: "builtin-codemaker/deepseek-flash"`, so every assistant message was
-    // stamped with a model that never answered (measured: the reply was correct and the
-    // recorded model was wrong). A user reading the footer, or a transcript reloaded later,
-    // was told the wrong thing.
+    // which entry is running. Measured with `opencode acp` behind a custom provider: the list
+    // began with the agent's own free models while `session/new` reported a `currentValue`
+    // from the configured provider, so every assistant message was stamped with a model that
+    // never answered (the reply was correct and the recorded model was wrong). A user reading
+    // the footer, or a transcript reloaded later, was told the wrong thing.
     const reported = record ? this.reportedModelFor(record) : undefined;
     if (reported) return reported;
     const entry = (record ? this.modelCatalog(record).models : this.modelCatalog().models).find((model) =>
