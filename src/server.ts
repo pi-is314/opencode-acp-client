@@ -1301,6 +1301,19 @@ export class BridgeServer {
       located({ connections: [] });
       return;
     }
+    // ★ `/api/rpc/{rpcID}/{method}` is a REAL route in the published spec ("Call a plugin RPC",
+    // and a `/api/rpc` event in the v2 vocabulary) — it was falling through to the empty-array
+    // default below, which is the wrong shape. `Rpc.Output` is `{output}`, so a caller that
+    // destructures `.output` got `undefined` and asked again; measured: v2.3.2's
+    // `opencode.goal/get` on every session switch, 44 requests in one session.
+    //
+    // The bridge runs no plugins, so the honest answer is "this RPC has no output" — the same
+    // truth as the empty lists above, in the shape the schema declares.
+    if (/^\/api\/rpc\/[^/]+\/[^/]+$/.test(path)) {
+      this.log(`[bridge] ${method} ${path}: no plugin RPC is registered here (answering {output: null})`);
+      json({ output: null });
+      return;
+    }
     this.log(`[bridge] unhandled route: ${method} ${path}`);
     if (path.startsWith('/api/')) {
       located([]);
@@ -2064,7 +2077,17 @@ export class BridgeServer {
       const agent = this.agents.get(sessionId);
       // Read before cancelling: this is the spec's `interrupted` — true when a
       // running execution was actually interrupted, false for an idle no-op.
-      const interrupted = record.busy;
+      //
+      // ★ Two signals, because they are set by different layers and one can lag the other.
+      //
+      // `record.busy` is the translator's view: set when it emits the turn's start, cleared when
+      // it closes the turns' parts. `promptsInFlight` is the server's own: added the moment the
+      // prompt request is accepted, before any ACP frame has come back. A prompt that has been
+      // accepted but whose first update has not arrived yet is BUSY, and answering
+      // `{interrupted:false}` there tells the client nothing was running — it keeps its spinner
+      // and the user sees a cancel that did nothing, although `agent.cancel()` was sent.
+      // Line 3171 already consults both for the same reason.
+      const interrupted = record.busy || this.promptsInFlight.has(record.session.id);
       // Remember the intent: the turn settles later, and by then the agent's stop
       // reason is the only other evidence of what happened.
       record.interruptRequested = true;

@@ -264,14 +264,21 @@ export function projectMessage(
       message.time.completed === undefined
         ? { created: message.time.created }
         : { created: message.time.created, completed: message.time.completed },
+    // `finish` is the schema's "how did this end", and it is written on BOTH outcomes.
+    //
+    // ★ It used to be written only for an error. A turn that ended normally therefore carried
+    // `finish: undefined`, and the TUI kept its spinner up after the answer had finished
+    // streaming — the transcript was complete and the screen still said "running". Measured:
+    // a resumed (`-c`) session whose assistant row was `completed: true, finish: null`, with
+    // `/api/session/active` already empty and two Esc presses answered `{interrupted:false}`
+    // (correctly — nothing was running). The missing value, not a stuck turn, was the bug.
+    //
+    // The enum is `stop | length | tool-calls | content-filter | error | unknown`; a turn that
+    // ended with an error gets `error`, everything else `stop`.
     ...(message.error === undefined
-      ? {}
+      ? { finish: 'stop' as const }
       : {
           error: { type: message.error.name, message: message.error.message },
-          // `finish` is what the message schema offers for "how did this end", and
-          // 'error' is one of its values. Without it the transcript carried the
-          // failure but the TUI had nothing to render — a turn that died mid-task
-          // simply looked like it had stopped, which is exactly how it was reported.
           finish: 'error' as const,
         }),
   };

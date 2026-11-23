@@ -150,4 +150,22 @@ describe('projectMessage', () => {
     expect(projected.model).toEqual({ id: 'unknown', providerID: 'fake-acp' });
     expect(projected.content).toEqual([]);
   });
+
+  // ★ A turn that ended normally still has to say HOW it ended. `finish` used to be written
+  // only when there was an error, so a completed row carried `finish: undefined` — and the
+  // client kept its spinner up after the answer had finished streaming. Measured on a real
+  // resumed (`-c`) session: the assistant row was `completed: true, finish: null`,
+  // `/api/session/active` was already empty, and two Esc presses answered
+  // `{interrupted:false}` because nothing was running. The screen disagreed with all three.
+  it('records how a turn ended, not only when it ended badly', () => {
+    const ok = projectMessage(message('assistant'), [text('done')], context);
+    expect(ok.finish).toBe('stop');
+
+    const failed = projectMessage(
+      message('assistant', { error: { name: 'AcpError', message: 'agent died' } }),
+      [],
+      context,
+    );
+    expect(failed.finish).toBe('error');
+  });
 });
