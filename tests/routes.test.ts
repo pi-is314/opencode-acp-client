@@ -233,7 +233,7 @@ describe('v2.2.0 additions', () => {
 describe('the reasoning-effort option reaches the model picker', () => {
   it('reads an option the agent calls `effort`, not only `thought_level`', async () => {
     // ★ The option's name belongs to the agent; only its category is the spec's. Matching the
-    // name alone made `dsh --profile martty-acp` (which calls it `effort`) show no variants at
+    // name alone made an agent that calls it `effort` show no variants at
     // all, so thinking could not be switched on from the TUI and the session stayed silent.
     const url = await start({ FAKE_ACP_MODELS: '1', FAKE_ACP_EFFORT: '1' });
     // The variants are read from a LIVE session's config options, so one has to exist.

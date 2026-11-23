@@ -97,7 +97,7 @@ opencode v2 TUI 没有对应 ACP 能力的面。
 | `sessionCapabilities.list` | 会话可用；标题只有派生值 | 旧会话的发现与后端标题 | 目录名 / 派生标题 |
 | `session/set_config_option` | 会话开始时的模型 | 切模型；路由回 `400` 并点名是这个 agent 不提供 | `400 … this session's agent does not offer …` |
 
-**现成例子 —— dsh 官方 `acp` profile**（`deepseek-harness-acp 0.0.1`）：
+**现成例子 —— dsh 官方 `acp` profile**（`dsh --profile acp`）：
 它宣告 `{close, list, resume}`、`promptCapabilities: {image: false, audio: false, embeddedContext: false}`，
 **没有 `loadSession`**。所以恢复出来的会话**确实是恢复成功**，但看不到历史（tab 保留真名，Notice 说明原因）；
 标题只能来自第一条 prompt（现在会写进映射表）或目录名；图片块被丢掉；删 tab 也不会删掉 agent 侧的会话。

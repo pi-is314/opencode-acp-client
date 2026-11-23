@@ -104,7 +104,6 @@ agent 隔离（`~/.opencode-acp-client/opencode/<agent-slug>/`），属于其它
 | Agent | 命令 |
 |---|---|
 | dsh（内置 ACP profile） | `dsh --profile acp` |
-| dsh + [deepseek-harness-acp](https://github.com/openma-ai/deepseek-harness-acp)（openma 的插件） | `dsh --profile <你的 profile>` |
 | opencode | `opencode acp` |
 | [qwen-code](https://github.com/QwenLM/qwen-code) | `qwen --acp` |
 | [claude-acp](https://github.com/agentclientprotocol/claude-agent-acp) | `npx -y @agentclientprotocol/claude-agent-acp` |

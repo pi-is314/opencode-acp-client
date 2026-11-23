@@ -2814,7 +2814,7 @@ describe('the model switch the client announces', () => {
 describe('the /thinking pick (model.variant) reaches the agent', () => {
   // ★ The TUI's `/thinking` posts the SAME model with a `variant`. The bridge read only the
   // model id, saw it unchanged, answered "already selected" with 204, and never told the
-  // agent — measured on `dsh --profile martty-acp`: the owner picked `max`, the agent stayed on
+  // agent — measured on a real session: the owner picked `max`, the agent stayed on
   // `effort = off`, and no thought ever appeared. The pick must become
   // `session/set_config_option effort=<variant>`, and the agent's answer must carry it.
   it('switches the effort option even when the model is unchanged', async () => {
@@ -4087,7 +4087,7 @@ describe('--continue: what the agent lists is NOT adopted', () => {
     // `GET /api/session` — which the TUI issues at startup — ran session discovery and gave
     // every titled session an alias, so `-c` would find the agent's conversations. With an
     // agent that keeps private ones, it adopted those too: measured against
-    // `dsh --profile martty-acp`, 21 of 22 listed sessions were dsh's own, titled
+    // a third-party dsh ACP profile, 21 of 22 listed sessions were the agent's own, titled
     // "You are a careful implementer.". They became tabs, `-c` restored them, and cleaning
     // the map did not hold — the next launch wrote them back.
     //

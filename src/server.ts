@@ -273,7 +273,7 @@ export class BridgeServer {
   /**
    * One ACP connection per (command, args) — the agent program, not the tab.
    *
-   * ACP sessions are independent on one connection (Martty ships this shape: one
+   * ACP sessions are independent on one connection (dsh's `acp` profile ships this shape: one
    * stdio connection, many session tabs), and a whole agent process per tab is what
    * made every new tab pay a cold start. Sessions still keep their own catalog
    * (`AcpClient` tracks config per session id) and their own translator; only the
@@ -3007,7 +3007,7 @@ export class BridgeServer {
           //
           // The `?? \`ses_acp_${…}\`` fallback gave an alias to EVERY titled session the
           // agent listed, so the agent's own private conversations were adopted as this
-          // bridge's. Measured with `dsh --profile martty-acp`: `session/list` returns 22
+          // bridge's. Measured with one third-party dsh ACP profile: `session/list` returns 22
           // sessions for one directory, 21 of them titled "You are a careful implementer."
           // — dsh's internal ones. Every one became a map row, a TUI tab and a
           // `session.created` event; `-c` then restored them beside the conversation the
@@ -4191,7 +4191,7 @@ export class BridgeServer {
         // ★ The option's NAME is the agent's to choose; its CATEGORY is the spec's.
         //
         // Matching only `thought_level` / `reasoning_effort` made an agent that calls the same
-        // idea `effort` invisible: `dsh --profile martty-acp` offers `effort = off | high |
+        // idea `effort` invisible: one third-party dsh ACP profile offers `effort = off | high |
         // max`, none of it reached the picker, and there was no way to switch thinking on from
         // the TUI at all. The agent stayed on `off`, so its `agent_thought_chunk` updates —
         // which dsh-acp does emit for a `reasoning` block — never had anything to carry, and

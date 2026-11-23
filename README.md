@@ -114,7 +114,6 @@ Every row is a real run, not copied from documentation.
 | Agent | Command |
 |---|---|
 | dsh (built-in ACP profile) | `dsh --profile acp` |
-| dsh + [deepseek-harness-acp](https://github.com/openma-ai/deepseek-harness-acp) (openma's plugin) | `dsh --profile <your profile>` |
 | opencode | `opencode acp` |
 | [qwen-code](https://github.com/QwenLM/qwen-code) | `qwen --acp` |
 | [claude-acp](https://github.com/agentclientprotocol/claude-agent-acp) | `npx -y @agentclientprotocol/claude-agent-acp` |

@@ -104,7 +104,7 @@ not see? Per-agent measurements (with the exact `initialize` responses) live in
 | `sessionCapabilities.list` | sessions work; titles are whatever we derived | discovery of older conversations and backend titles | directory/derived title |
 | `session/set_config_option` | whatever model the session started with | switching models; the route answers `400` naming the agent as the reason | `400 … this session's agent does not offer …` |
 
-**Worked example — dsh's official `acp` profile** (`deepseek-harness-acp 0.0.1`):
+**Worked example — dsh's official `acp` profile** (`dsh --profile acp`):
 it advertises `{close, list, resume}`, `promptCapabilities: {image: false, audio: false,
 embeddedContext: false}` and **no `loadSession`**. So a restored session resumes correctly but shows
 no history — the tab keeps its real name and the `◈ Notice` explains why; its titles come only from the first
