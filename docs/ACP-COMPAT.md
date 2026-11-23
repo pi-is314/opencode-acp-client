@@ -112,6 +112,13 @@ prompt (now persisted in the map) or the directory; image blocks are dropped; an
 not delete the agent's session. The other common agents (`opencode acp`, `claude-agent-acp`,
 `codex-acp`) advertise `loadSession`, so none of those four symptoms apply to them.
 
+★ Its reasoning effort is a config option named **`reasoning_effort`**, not `effort`. The bridge
+matches the option by `category` (`thought_level`) with the ids `reasoning_effort` / `effort` as
+fallbacks, so `/effort high` reaches it and the agent then streams real `agent_thought_chunk`
+updates (measured: 16 thought chunks in one turn). An earlier reading of this project concluded
+that profile "has no effort option" — that was a probe that only looked for the id `effort`;
+match the CATEGORY, or the next agent's choice of name hides the option entirely.
+
 ## Capabilities opencode v2 does not have
 
 Some ACP features have nowhere to land in the TUI. That is not a bridge gap, and

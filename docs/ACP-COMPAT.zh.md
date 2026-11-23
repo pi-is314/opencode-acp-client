@@ -104,6 +104,12 @@ opencode v2 TUI 没有对应 ACP 能力的面。
 其余常用 agent（`opencode acp` / `claude-agent-acp` / `codex-acp`）都宣告了 `loadSession`，
 所以这四类症状对它们不成立。
 
+★ 它的推理强度是一个名为 **`reasoning_effort`** 的配置项，不是 `effort`。桥按 `category`
+（`thought_level`）匹配，`reasoning_effort` / `effort` 两个 id 作为兜底，所以 `/effort high`
+能送达，agent 随后会真的流式发出 `agent_thought_chunk`（实测：一轮 16 个 thought）
+。本项目早前曾据此得出"该 profile 没有 effort 选项"的结论——那是一次只查 `effort` 这个 id 的探测；
+按 CATEGORY 匹配，否则下一个 agent 换个名字就把整个选项藏起来了。
+
 ## opencode v2 里没有落点的能力
 
 有些 ACP 能力在 TUI 里**没有地方可放**。这不是桥的缺口，而桥**也不会为它造一个落点** —— 一个没人渲染的事件，看起来和"功能正常"一模一样，直到你发现屏幕是空的。
