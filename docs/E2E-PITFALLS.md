@@ -407,6 +407,23 @@ it) rather than guessing from another release's source.
 after the cancel. Where the spec says an array is non-empty, never send `[]` — omit the field when
 there is nothing, or send one empty text entry when it is required.
 
+## 16. ★ v2.4's release-highlights screen holds the composer, and the harness cannot tell it from a broken client
+
+**Symptom**: every mode that waits for the composer fails with "the TUI never became ready for
+input", on macOS and Linux, the first time v2.4.1 is run.
+
+**Cause**: v2.4 made the release-highlights screen a real setting (`highlights`, default on).
+`app.tsx` opens `DialogHighlights` on an idle home screen and waits for `enter`; the dialog sits on
+top of the composer, so the placeholder a harness waits for never appears.
+
+**Fix**: write `highlights: false` into the harness config, beside the v2.3 `session.verbosity` pin.
+It is a choice about the HARNESS — a user who wants the screen keeps it — and it belongs in the same
+place as the other pins so the next release's addition has an obvious home.
+
+**Rule**: a first-launch dialog outranks any wait for the composer. When a mode times out before
+typing anything, capture the pane BEFORE concluding the client is broken — the pane showed the
+dialog, and the log showed a healthy bridge.
+
 ## Self-check
 
 After touching `scripts/e2e-*.sh`:

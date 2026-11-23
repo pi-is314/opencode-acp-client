@@ -28,6 +28,7 @@ minor is a much better trade than a silent one.
 | opencode v2 | Date | What was run |
 |---|---|---|
 | **2.0.0 / 2.1.0 / 2.2.7** | 2026-11-13 | The boundary matrix, run end to end by `scripts/compat-matrix.sh` on macOS: **3 cells, 0 failed**. The point was not to re-prove HTTP (the per-release rows above do that) but to find assertions that only hold on the newest release. It found four, all ours, plus two differences that are the client's own: v2.0.0 does not group a lone `websearch` (only grep/glob count as exploration), and v2.0.0's `/timeline` **kills the TUI** (v2.2.7 moved that view into a plugin). |
+| `v2.4.1` | 2026-11-24 | The whole gate plus the real-agent matrix on **all three platforms** (macOS, Debian 12, Windows): 436 unit tests 0 skipped, `verify` EXIT=0 on macOS and Linux, `e2e-protocol` 8/8 and `MODE=todo` 7/7 on Windows, and the matrix **5 builds × 5 agents PASS on every platform**. HTTP surface diffed against v2.3.2 (taken from the tag, `packages/protocol/openapi.json`): 142 → 146 routes, 518 → 528 schemas, **nothing removed** — the four new routes are experimental (`/api/experimental/machine`, `/machine/link`, `/machine/{name}`, `/job/{id}/cancel`) and the new schemas are their own plus `Model.Speed`, which `Model.Info` does not reference. The events the bridge emits (`session.execution.*`, `session.tool.*`, `session.step.*`, `SessionStatus`) are byte-identical between the two releases. **One behaviour change the gate tripped over**, again the client's own: the release-highlights screen is now a first-class setting (`highlights`, default on, `app.tsx` opens `DialogHighlights` on an idle home screen and waits for Enter), on top of the composer, so every mode waiting for input timed out with "the TUI never became ready". The harness writes `highlights: false` beside its verbosity pin. The TUI's own work is presentation only (composer tabs, a scripts tab, group-view); it makes no new API calls. |
 | `v2.3.0` | 2026-11-14 | 139 → 139 routes, 498 → 500 schemas, **nothing removed**: `experimental.mcp.event` (we do not implement MCP) and `session.step.first-token`, which neither `packages/tui/src` nor `packages/app/src` consumes — it is a server-side timing event, so not emitting it changes nothing on screen. **Two behaviour changes the gate tripped over, both deliberate on the client's side:** a *What's new in this release* dialog on the first launch of a version (`dialog-highlights.tsx`, Enter clears it) held the composer, so every mode waiting for input timed out; and `session.verbosity` now defaults to `low`, which collapses a run of tool calls into one activity row (`dialog-config.tsx: default: "low"`), so tool-card assertions cannot read the row. The harness dismisses the dialog inside its wait and pins `session.verbosity: "high"` through `OPENCODE_CONFIG_DIR` — note the file is `cli.json` as of this release; `tui.json` is read only to migrate. Manifest moved to 140 routes afterwards. |
 | `v2.2.7` | 2026-11-11 | The whole gate, run on macOS via `--path` against the v2 installer's binary. No route diff was taken (the surface is unchanged from 2.2.6 as far as this run could see: every route the bridge serves still answered, `check-openapi.py` reported the same 32 pass / 20 note / 0 fail). **What the run did find was ours**: the rendering mode's `send_prompt` helper typed the prompt, slept 1.6s and pressed Enter, which under load sometimes landed before the composer took keystrokes — the turn never started, and the failure looked like a translation-layer regression ("every layer is missing", no session id in the log, while the bridge had in fact served session/model/agent/command). The helper waits for its own text on screen now. Fixed, then the full gate passed. |
 | `v2.2.6` | 2026-11-07 | 138 → 139 routes: one experimental addition, `GET /api/experimental/job?sessionID=&kind=` listing background work (`Job.Info = Job.Shell \| Job.Subagent \| Job.Image`). Nothing removed. The rest of the diff is schema-shape churn from the generator — the `location`/`types` query parameters went from `{anyOf: […]}` to an equivalent `{type: object, properties: …}`, and the ~100 "new" schemas are the v2 events getting modelled (`Event.ID`, `session.*`, `Job.*`) where they used to be bare enum strings. **`/api/event`'s `types` enum is 96 → 96: not one event type added or removed.** None of the eight schemas the bridge consumes changed, so no code change was needed. Worth knowing: the TUI gained transcript jumps inside subagent sessions (#60817) — that is its own native-session feature, not something the ACP path can reach. |
@@ -59,6 +60,7 @@ every real-TUI mode in tmux — has run on **macOS** (darwin-x64) and on **Debia
 | v2.1.0 | ✓ | ✓ |
 | v2.2.0 | ✓ | ✓ |
 | v2.3.0 | ✓ | ✓ |
+| v2.4.0 / v2.4.1 | ✓ | ✓ |
 
 macOS carries additional point releases (v2.2.7 and others) recorded per version above.
 An earlier Linux run used **Alpine/musl** in Docker at v2.0.0; the matrix above is glibc.
@@ -212,6 +214,20 @@ that had to recall an earlier turn:
 | macOS | 2.0.32, 2.1.4, 2.2.7, 2.3.2 | **20/20** |
 | Linux | 2.0.32, 2.1.4, 2.2.7, 2.3.2 | **20/20** |
 | Windows | 2.0.32, 2.1.4, 2.2.7, 2.3.2 | **20/20** |
+
+Re-run on 2026-11-24 with **v2.4.1** added, every platform against the same endpoint, one cell per
+build × agent (5 builds × 5 agents):
+
+| platform | build | result |
+|---|---|---|
+| macOS | 2.4.1 | **5/5 PASS** |
+| Linux | 2.4.1 | **5/5 PASS** |
+| Windows | 2.4.1 | **5/5 PASS** |
+
+On Windows two cells were BLOCKED/FAIL on the first attempt and passed once the machine had the
+same credentials the others use (`CMHUB_API_KEY`, referenced by `apiKeyEnv` in the dsh profile and
+`env_key` in `~/.codex/config.toml`): an agent's missing key is the agent's cell, not the bridge's,
+and it reads as a bridge failure until the credential is there.
 
 Every row is 4 builds × 5 agents (`opencode acp`, claude-agent-acp, codex-acp, qwen,
 `dsh --profile acp`).

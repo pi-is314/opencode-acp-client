@@ -25,6 +25,7 @@
 | opencode v2 | 日期 | 跑了什么 |
 |---|---|---|
 | **2.0.0 / 2.1.0 / 2.2.7** | 2026-11-13 | 边界矩阵，由 `scripts/compat-matrix.sh` 在 macOS 上端到端跑完：**3 个细胞、0 失败**。它的目的不是重新证明 HTTP（上面每个 release 的行已经做了），而是找出**只在最新版成立**的断言。抓出四处，全是我们的；另有两处属于客户端自己：v2.0.0 对单个 `websearch` 不分组（只有 grep/glob 算探索），以及 v2.0.0 的 `/timeline` **会杀掉 TUI**（v2.2.7 把那个视图挪进了插件）。|
+| `v2.4.1` | 2026-11-24 | **三个平台**（macOS、Debian 12、Windows）各跑完整门控 + 真实 agent 矩阵：436 个单元测试 0 跳过，macOS 与 Linux 上 `verify` EXIT=0，Windows 上 `e2e-protocol` 8/8、`MODE=todo` 7/7，矩阵在**每个平台都是 5 个构建 × 5 个 agent 全 PASS**。HTTP 面与 v2.3.2 逐项对比（取自 tag 的 `packages/protocol/openapi.json`）：路由 142 → 146，schema 518 → 528，**没有任何删除** —— 新增的 4 条路由都是 experimental（`/api/experimental/machine`、`/machine/link`、`/machine/{name}`、`/job/{id}/cancel`），新增 schema 除了它们自己就是 `Model.Speed`，而 `Model.Info` 并没有引用它。桥发出的事件（`session.execution.*`、`session.tool.*`、`session.step.*`、`SessionStatus`）两个版本之间逐字段一致。**门控只在一处被行为变化绊倒**，同样来自客户端自己：发布亮点屏现在是一个正经配置项（`highlights`，默认开，`app.tsx` 在空闲首页上打开 `DialogHighlights` 并等 Enter），它压住 composer，于是所有等输入的等待都以"the TUI never became ready" 超时。验收脚本在固定 verbosity 的地方一并写入 `highlights: false`。TUI 自己的改动只在呈现层（composer 标签页、scripts 标签页、group-view），没有发起新的 API 调用。 |
 | `v2.3.0` | 2026-11-14 | 路由 139 → 139，schema 498 → 500，**没有任何删除**：`experimental.mcp.event`（我们没实现 MCP）与 `session.step.first-token`，后者在 `packages/tui/src` 和 `packages/app/src` 里**没有消费者** —— 它是服务端计时事件，不发的 不影响屏幕。**两处行为变化让门控翻车，都是客户端自己有意为之**：某个版本**首次启动会弹** *What's new in this release* 对话框（`dialog-highlights.tsx`，Enter 关闭），它占住 composer，所有等输入的等待全部超时；以及 `session.verbosity` 默认变成 `low`，把一串工具调用折叠成一行（`dialog-config.tsx: default: "low"`），工具卡片断言读不到那一行。验收脚本在等待里关掉对话框，并通过 `OPENCODE_CONFIG_DIR` 固定 `session.verbosity: "high"` —— 注意这个版本起的配置文件名是 `cli.json`，`tui.json` 只用于迁移。|| `v2.2.7` | 2026-11-11 | 在 macOS 上用 `--path` 对 v2 安装器装出来的二进制跑完整门控。没有做路由 diff（就这次能观测到的而言，接口面与 2.2.6 一致：桥服务的每个路由都照常应答，`check-openapi.py` 仍是 32 pass / 20 note / 0 fail）。**这次跑出来的问题在我们自己的脚本里**：渲染模式的 `send_prompt` 打完字后固定等 1.6s 再按 Enter，负载下有时落在 composer 还没接管按键之前 —— 回合根本没开始，而失败的样子像翻译层回归（"每一层都缺"、日志里没有 session id，可桥其实已经服务了 session/model/agent/command）。helper 现在先等自己打进去的文字出现在屏幕上。修完，门控整轮通过。 |
 | `v2.2.7` | 2026-11-11 | 在 macOS 上用 `--path` 对 v2 安装器装出来的二进制跑完整门控。没有做路由 diff（就这次能观测到的而言，接口面与 2.2.6 一致）。**这次跑出来的问题在我们自己的脚本里**：渲染模式的 `send_prompt` 打完字后固定等 1.6s 再按 Enter，负载下有时落在 composer 还没接管按键之前 —— 回合根本没开始，而失败的样子像翻译层回归。helper 现在先等桥日志里出现新的 `/prompt`。|
 | `v2.2.6` | 2026-11-07 | 138 → 139 条路由：只新增一条 experimental 的 `GET /api/experimental/job?sessionID=&kind=`，列出后台工作（`Job.Info = Job.Shell \| Job.Subagent \| Job.Image`）。没有删除。其余都是生成器对 schema 写法的重构——`location`/`types` 查询参数从 `{anyOf: […]}` 变成等价的 `{type: object, properties: …}`；那约 100 个“新增” schema 是 v2 事件终于被建模了（`Event.ID`、`session.*`、`Job.*`），以前只是枚举字符串。**`/api/event` 的 `types` 枚举 96 → 96：一个事件类型都没增删。** 桥消费的 8 个 schema 全部未变，所以不需要改代码。值得知道的一点：TUI 新增了“subagent 会话内的 transcript 跳转”（#60817）——那是它自己原生会话的能力，ACP 这条路走不到 |
@@ -54,6 +55,7 @@
 | v2.1.0 | ✓ | ✓ |
 | v2.2.0 | ✓ | ✓ |
 | v2.3.0 | ✓ | ✓ |
+| v2.4.0 / v2.4.1 | ✓ | ✓ |
 
 macOS 上还跑过若干中间版本（v2.2.7 等），逐条记在上面的版本表里。更早的一次 Linux 运行
 用的是 Docker 里的 **Alpine/musl**（v2.0.0）；上表是 glibc。Debian 上的单测还通过了
@@ -184,6 +186,19 @@ shell 的 `execFile`/`spawn` 起不了它——即使命令就在 `PATH` 上，�
 | macOS | 2.0.32 / 2.1.4 / 2.2.7 / 2.3.2 | **20/20** |
 | Linux | 2.0.32 / 2.1.4 / 2.2.7 / 2.3.2 | **20/20** |
 | Windows | 2.0.32 / 2.1.4 / 2.2.7 / 2.3.2 | **20/20** |
+
+2026-11-24 补跑，加入 **v2.4.1**，每个平台对同一个端点、每格 = 一个构建 × 一个 agent
+（5 个构建 × 5 个 agent 中本次只测 2.4.1 一个构建）：
+
+| 平台 | 构建 | 结果 |
+|---|---|---|
+| macOS | 2.4.1 | **5/5 PASS** |
+| Linux | 2.4.1 | **5/5 PASS** |
+| Windows | 2.4.1 | **5/5 PASS** |
+
+Windows 上本次首跑有两格是 BLOCKED/FAIL，补上与其它机器相同的凭证
+（`CMHUB_API_KEY`，dsh profile 的 `apiKeyEnv` 和 `~/.codex/config.toml` 的 `env_key` 都指向它）后就通过了：
+agent 少一把 key 是它自己那一格的问题，不是桥的，但在凭 evidence 缺失之前它看起来就像桥的失败。
 
 每一行都是 4 个构建 × 5 个 agent（`opencode acp`、claude-agent-acp、codex-acp、qwen、
 `dsh --profile acp`）。
