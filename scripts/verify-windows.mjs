@@ -37,7 +37,38 @@ const SPEC = process.env.OPENCODE_SPEC ?? join(REPO, '.cache', 'openapi.json');
 const SPEC_URL = 'https://opencode.ai/v2/openapi.json';
 const PY = process.env.PYTHON ?? 'python';
 
+
+/** Git for Windows' bash, in the two places it installs to. */
+function findBash() {
+  for (const candidate of [
+    'C:\\Program Files\\Git\\bin\\bash.exe',
+    'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
+  ]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+/** A Windows path as the bash that receives it spells it: `/c/oac/scripts/x.sh`. */
+function toPosix(path) {
+  return path.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`);
+}
+
+/**
+ * The environment the bash suites need on Windows.
+ *
+ * `PYTHONIOENCODING` because they print `✓`/`✗` and a Windows console defaults to GBK, which
+ * raised `UnicodeEncodeError: 'gbk' codec can't encode character '\u2713'` mid-run; the suites
+ * also call `python3`, which CPython does not install on Windows, so the gate says what to do
+ * when that name is missing rather than failing halfway through scenario 1.
+ */
+function bashEnv() {
+  if (process.env.PYTHONIOENCODING) return process.env;
+  return { ...process.env, PYTHONIOENCODING: 'utf-8' };
+}
+
 let failed = 0;
+let bash;
 
 function step(title) {
   process.stdout.write(`\n▸ ${title}\n`);
@@ -58,7 +89,8 @@ function fail(message) {
  */
 function run(command, args, { optional = false } = {}) {
   process.stdout.write(`  $ ${command} ${args.join(' ')}\n`);
-  const result = spawnSync(command, args, { cwd: REPO, stdio: 'inherit', shell: false, env: process.env });
+  const env = command === bash ? bashEnv() : process.env;
+  const result = spawnSync(command, args, { cwd: REPO, stdio: 'inherit', shell: false, env });
   if (result.error) {
     if (!optional) fail(`${command} could not run: ${result.error.message}`);
     return false;
@@ -117,8 +149,20 @@ if (!run(PY, [join('scripts', 'check-links.py')])) fail('docs links');
 
 specConformance();
 
-must('e2e: smoke (20 scenarios, fake agent, real HTTP)', 'node', [join('scripts', 'e2e-smoke.mjs')]);
-must('e2e: entry (single command, exit code, no strays)', 'node', [join('scripts', 'e2e-entry.mjs')]);
+// ★ The smoke and entry suites stay bash — 1,500 lines that would be a second implementation to
+// keep in step, and Git for Windows ships the bash they need. Only the parts that are genuinely
+// Windows-specific (a `.cmd` shim, a drive path, `taskkill` rather than `kill`) bite, and the two
+// are ported below as what they need: `python3` on PATH and UTF-8 output, because the scripts
+// print ✓/✗ and the default console code page is GBK.
+bash = findBash();
+if (!bash) {
+  fail('Git Bash is required for the smoke and entry steps (install Git for Windows)');
+} else {
+  process.stdout.write(`  using ${bash}\n`);
+  must('e2e: smoke (20 scenarios, fake agent, real HTTP)', bash, [toPosix(join(REPO, 'scripts', 'e2e-smoke.sh'))]);
+  must('e2e: entry (single command, exit code, no strays)', bash, [toPosix(join(REPO, 'scripts', 'e2e-entry.sh'))]);
+}
+
 must('e2e: protocol (ready line → session → turn → catalog → model → interrupt)', 'node', [
   join('scripts', 'e2e-protocol.mjs'),
 ]);

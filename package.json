@@ -47,7 +47,8 @@
     "e2e:protocol": "node scripts/e2e-protocol.mjs",
     "e2e:todo:win": "node scripts/e2e-todo-windows.mjs",
     "e2e:matrix": "node scripts/e2e-matrix-real.mjs",
-    "e2e:conversation": "node scripts/e2e-real-conversation.mjs"
+    "e2e:conversation": "node scripts/e2e-real-conversation.mjs",
+    "verify:win": "node scripts/verify-windows.mjs"
   },
   "engines": {
     "node": ">=20"
