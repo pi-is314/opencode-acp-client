@@ -16,6 +16,18 @@ import re
 import subprocess
 import sys
 
+# ★ The output carries ✓ / ✗, and a Windows console defaults to a legacy code page (GBK on the
+# verification VM), where printing one raises `UnicodeEncodeError: 'gbk' codec can't encode
+# character '\u2713'` and the check exits non-zero having found nothing wrong. Reconfiguring
+# stdout/stderr to UTF-8 makes the script work on the machine rather than requiring every caller
+# to export PYTHONIOENCODING — the bash gate did not, and its doc-link step failed for that
+# reason alone.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 LINK = re.compile(r"\]\(([^)\s]+)\)")
 SKIP = ("http://", "https://", "#", "mailto:")

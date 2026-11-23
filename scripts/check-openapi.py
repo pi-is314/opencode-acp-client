@@ -23,6 +23,14 @@ import os
 import re
 import subprocess
 import sys
+
+# Same reason as check-links.py: the verdict line is `✓`/`✗`, and a Windows console's default
+# code page cannot encode it. Reconfigure here so no caller has to export PYTHONIOENCODING.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
 import tempfile
 import shutil
 import time
@@ -151,20 +159,36 @@ def main() -> int:
         FAKE_ACP_ELICIT="1",
         OPENCODE_ACP_CLIENT_SESSION_MAP=os.path.join(map_dir, "sessions.json"),
     )
+    # ★ The bridge's output goes to a FILE, not a pipe.
+    #
+    # It was `stdout=PIPE` and nothing ever drained the pipe after the ready line, so once the
+    # bridge had written a buffer's worth of log the write blocked — and then every probe after it
+    # timed out. Measured on the Windows VM: the run died at
+    # `GET /api/session/{id}/form/{id}/state` with `TimeoutError: timed out`, with nothing wrong
+    # in the route itself (it answers 200). A file has no such limit, and it leaves the log behind
+    # for a post-mortem instead of discarding it.
+    log_path = os.path.join(map_dir, "probe.log")
+    log_file = open(log_path, "w", encoding="utf-8", errors="replace")
     server = subprocess.Popen(
         [sys.executable and "node", args.node, "--no-tui", "--bridge-port", str(args.port),
          os.getcwd(), "--", "node", os.path.abspath("tests/fake-acp-agent.mjs")],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
+        stdout=log_file, stderr=subprocess.STDOUT, text=True, env=env,
     )
     base = f"http://127.0.0.1:{args.port}"
+
+    def read_log() -> str:
+        log_file.flush()
+        with open(log_path, "r", encoding="utf-8", errors="replace") as handle:
+            return handle.read()
+
     try:
         deadline = time.time() + 30
         while time.time() < deadline:
-            line = server.stdout.readline() if server.stdout else ""
-            if '"type":"ready"' in line:
+            if '"type":"ready"' in read_log():
                 break
+            time.sleep(0.05)
         else:
-            print("✗ server never became ready")
+            print("✗ server never became ready (log: %s)" % log_path)
             return 1
 
         results: list[tuple[str, str, str, list[str]]] = []
@@ -311,6 +335,8 @@ def main() -> int:
             server.wait(timeout=10)
         except subprocess.TimeoutExpired:
             server.kill()
+        # The child is gone before the log handle is closed, so Windows can delete the directory.
+        log_file.close()
         shutil.rmtree(map_dir, ignore_errors=True)
 
 
