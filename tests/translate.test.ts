@@ -220,6 +220,46 @@ describe('AcpTranslator', () => {
     expect(events.map((e) => e.type)).toContain('turn.idle');
   });
 
+  // ★ A tool event never carries `content: []`. The spec types it `NonEmptyArray`, and opencode
+  // v2.3's client acts on that: with image preview off it rewrites content through
+  // `[r(n[0]), ...]`, `r` reads `n[0].type`, and on `[]` the handler throws
+  // `TypeError: ... (evaluating 'd.type')`. That uncaught exception swallowed the
+  // `session.execution.interrupted` that clears the spinner, so a double-Esc on a turn with a
+  // shell tool in flight left the footer on `esc interrupt` forever — reproduced in tmux on the
+  // real TUI, with both the fake agent and `dsh`.
+  it('never sends an empty content array on a tool event', () => {
+    const { translator, record, events } = harness();
+    translator.beginTurn(record);
+    translator.apply(record, {
+      sessionUpdate: 'tool_call',
+      toolCallId: 'c-cancel',
+      title: 'bash',
+      kind: 'execute',
+      status: 'in_progress',
+      rawInput: { command: 'sleep 600' },
+    });
+    translator.apply(record, {
+      sessionUpdate: 'tool_call',
+      toolCallId: 'c-empty',
+      title: 'noop',
+      kind: 'other',
+      status: 'in_progress',
+    });
+    translator.apply(record, { sessionUpdate: 'tool_call_update', toolCallId: 'c-empty', status: 'completed' });
+    // The cancel path: an in-flight tool closed by the bridge itself.
+    translator.closeOpenToolCalls(record, 'cancelled');
+    // And the agent's own late terminal update, the shape dsh sends.
+    translator.apply(record, { sessionUpdate: 'tool_call_update', toolCallId: 'c-cancel', status: 'failed' });
+    const toolEvents = events.filter(
+      (event) => event.type === 'session.tool.failed' || event.type === 'session.tool.success',
+    ) as Array<{ type: string; data: { content?: unknown[] } }>;
+    expect(toolEvents.length).toBeGreaterThanOrEqual(2);
+    for (const event of toolEvents) {
+      if (event.data.content !== undefined) expect(event.data.content.length).toBeGreaterThan(0);
+      if (event.type === 'session.tool.success') expect(event.data.content?.length).toBeGreaterThan(0);
+    }
+  });
+
   it('ends a cancelled turn as interrupted, never as succeeded', () => {
     const { translator, record, events } = harness();
     translator.beginTurn(record);
@@ -230,10 +270,8 @@ describe('AcpTranslator', () => {
     // turn the user cancelled.
     expect(types).not.toContain('session.execution.succeeded');
     expect(types).not.toContain('session.execution.failed');
-    // ★ The event carries a `reason`, and the spec requires one
-    // (`user | shutdown | superseded | inactivity`). It used to send only `sessionID`, which
-    // the client cannot decode — it dropped the event and kept its spinner turning, so a
-    // cancel that had worked looked like it had done nothing.
+    // The event carries a `reason`, and the spec requires one
+    // (`user | shutdown | superseded | inactivity`).
     const interrupted = events.find((event) => event.type === 'session.execution.interrupted') as
       | { data?: { reason?: unknown } }
       | undefined;

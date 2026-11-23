@@ -63,7 +63,11 @@ MODE="${MODE:-history}"
 # command is disabled and no gesture can produce a request. (Getting this wrong is
 # how an earlier version of this script "proved" that Escape does nothing.)
 if [ "$MODE" = "cancel" ]; then
-  FAKE_ENV="${FAKE_ENV:-FAKE_ACP_HANG=1 FAKE_ACP_MODELS=1}"
+  # ★ FAKE_ACP_HANG_TOOL=1: a shell tool is in flight when the turn is cancelled, and its own
+  # `failed` update arrives AFTER the cancel — what dsh does. Without the tool this mode passed
+  # while the real session's spinner never stopped: an empty `content: []` on the tool event
+  # threw inside opencode v2.3's client and swallowed `session.execution.interrupted`.
+  FAKE_ENV="${FAKE_ENV:-FAKE_ACP_HANG=1 FAKE_ACP_HANG_TOOL=1 FAKE_ACP_MODELS=1}"
 elif [ "$MODE" = "form" ]; then
   # The agent asks for structured input and waits; the turn can only finish if
   # the answer really got back to it.

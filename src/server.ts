@@ -3728,7 +3728,10 @@ export class BridgeServer {
         executed: true,
         // The shell's id, which is what `Shell` reads to find its entry and its output.
         metadata: { shellID: shellId },
-        content: outcome.output ? [{ type: 'text', text: outcome.output }] : [],
+        // ★ Never `[]`: the spec's `NonEmptyArray`, and opencode v2.3's client throws on an empty
+        // tool content (`[r(n[0]), …]` reads `n[0].type`), which also swallows the events after
+        // it. A `!command` that printed nothing still gets one empty text entry.
+        content: [{ type: 'text', text: outcome.output ?? '' }],
         resultState: undefined,
       },
       location: this.location,

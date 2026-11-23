@@ -379,6 +379,34 @@ nothing in the grid would have said so. **The agent your product launches is a c
 **Rule**: a wait condition on a growing list must name the element (id), not its arrival order. A
 matrix must include the agent the product starts by default.
 
+## 15. ★★ A fake agent that "never answers" cannot find the real cancel bug — a tool must be RUNNING
+
+**Symptom**: `MODE=cancel` was green on 4 TUI releases while, in the owner's real session, double
+Esc left both the prompt-footer spinner and the tool row spinning. The bridge was right throughout:
+`prompt settled stopReason="cancelled"`, `session.execution.interrupted {reason:"user"}` emitted,
+`/api/session/active` empty.
+
+**Cause**: the tool event sent on a cancel carried `content: []`. The spec types it `NonEmptyArray`
+(`minItems: 1`), and opencode v2.3's client, with image preview off (the default), rewrites tool
+content through `[r(n[0]), ...]`, where `r` reads `n[0].type`. On `[]` that is `undefined.type`: the
+handler throws (TUI log: `uncaught exception … evaluating 'd.type'`), and the
+`session.execution.interrupted` later in the same dispatch — the event that clears the spinner — is
+lost.
+
+**Why the test missed it**: the old cancel scenario only hung the prompt, with **no tool in flight**,
+so it never reached a tool event carrying `content`. A real agent (dsh) is in the middle of a shell
+tool when cancelled, and its own `failed` update arrives **after** the cancel. `MODE=cancel` now
+defaults to `FAKE_ACP_HANG_TOOL=1` to reproduce that: ✗ before the fix, ✓ on all 4 releases after.
+
+**Where to look**: when the screen and the bridge disagree, read **the TUI's own log**
+(`~/.opencode-acp-client/opencode/<agent>/data/opencode/log/opencode.log`), not only the bridge's.
+To place a minified name like `d.type`, search the installed binary itself (the JS is embedded in
+it) rather than guessing from another release's source.
+
+**Rule**: a cancel test must have a tool **running**, with the agent's terminal update arriving
+after the cancel. Where the spec says an array is non-empty, never send `[]` — omit the field when
+there is nothing, or send one empty text entry when it is required.
+
 ## Self-check
 
 After touching `scripts/e2e-*.sh`:

@@ -162,7 +162,8 @@ pnpm e2e:protocol # = node scripts/e2e-protocol.mjs  ★ 唯一能在 Windows �
                   #   （不是 acp/default 占位）→ 模型切换 → 打断的应答形状
 pnpm e2e:agent    # = bash scripts/e2e-real-agent.sh  真实 agent（必须 AGENT=<命令>；默认不发 prompt）
 pnpm e2e:tui      # = bash scripts/e2e-real-tui.sh    真 opencode v2 TUI（tmux）：按屏幕断言 + 重载历史
-                  #   MODE=cancel 那个模式查取消手势（自动把 agent 挂住；真的 Escape 要按两次）
+                  #   MODE=cancel 那个模式查取消手势（自动把 agent 挂住，并让一个 shell 工具正在跑、其 failed
+                  #   在取消之后才到——真实 agent 的样子；真的 Escape 要按两次）
                   #   AGENT=<命令> 换成真 agent（默认用假 agent）；如 AGENT="npx -y @agentclientprotocol/claude-agent-acp"
                   #   MODE=shell-history 验重载后 !命令 卡片是否还在（按屏幕断言）
                   #   MODE=patrol 把 TUI 全部斜杠命令逐个驱动一遍（面板存活 + 无 UnexpectedStatus + 留档）
@@ -184,7 +185,7 @@ pnpm e2e:dsh-acp # = bash scripts/e2e-dsh-acp.sh  ★ 真 agent 全功能验收�
                   #   跑完自动归档 dsh 的测试会话；不在总闸里（需要真 agent，见 e2e-real-agent 的同类约定）
 ```
 
-- **测试现状（本机实测）：29 文件 / 434 passed / ★ 0 skipped。**
+- **测试现状（本机实测）：29 文件 / 435 passed / ★ 0 skipped。**
   README 的状态表是**手写的**，改动测试时记得同步它。
 - ★ **不要引入 skip，也不要用 `fetch` 读 SSE。** vitest 下 `fetch` 会缓冲，读永远不返回；
   **用 `node:http`**（真 socket）。两个连带的事实：① 订阅是异步建立的，先 `openStream` 后立刻动作会丢掉最早的事件

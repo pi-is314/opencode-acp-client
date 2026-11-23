@@ -552,7 +552,7 @@ export class AcpTranslator {
             // Structured for the same reason as the failure event above.
             error: { type: 'tool', message: reason },
             metadata: {},
-            content: [],
+            // ★ No `content` at all — never `[]`. See `toolFailedContent`.
           },
           location: this.location,
         });
@@ -1056,7 +1056,9 @@ export class AcpTranslator {
           id,
           executed: true,
           metadata: { ...toolMetadata(update), ...(this.childMeta.get(String(update['toolCallId'] ?? '')) ?? {}) },
-          content: toolResult === undefined ? [] : [{ type: 'text', text: String(toolResult) }],
+          // `content` is REQUIRED here and must be non-empty (`Schema.NonEmptyArray`), so a tool
+          // that produced nothing still gets one empty text entry instead of `[]`.
+          content: [{ type: 'text', text: displayText(toolResult) ?? '' }],
           resultState: undefined,
         },
         location: this.location,
@@ -1081,10 +1083,7 @@ export class AcpTranslator {
           // is and serialises anything else; the fallback only applies when there is nothing.
           error: { type: 'tool', message: toolError(update) ?? displayText(toolResult) ?? 'tool failed' },
           metadata: toolMetadata(update),
-          content:
-            part.type === 'tool' && part.state.error !== undefined
-              ? [{ type: 'text', text: part.state.error }]
-              : [],
+          ...toolFailedContent(part.type === 'tool' ? part.state.error : undefined),
         },
         location: this.location,
       });
@@ -1164,6 +1163,25 @@ export function toolMetadata(update: SessionUpdate): Record<string, unknown> {
 function pickOutput(update: SessionUpdate): { output?: string } {
   const output = toolOutput(update);
   return output === undefined ? {} : { output };
+}
+
+/**
+ * The `content` field of a `session.tool.failed` event: present only when there is something
+ * to put in it.
+ *
+ * ★ `[]` is not a legal value. The spec declares `content` a `NonEmptyArray(Tool.Content)`
+ * (`minItems: 1`; optional on `failed`, required on `success`), and opencode v2.3's client
+ * acts on that: with image preview off — the default — it rewrites tool content through
+ * `[r(n[0]), ...n.slice(1).map(r)]`, and `r` reads `n[0].type`. On `[]` that is
+ * `undefined.type`, the handler throws (`TypeError: undefined is not an object (evaluating
+ * 'd.type')`, logged by the TUI as an uncaught exception), and every later event in the
+ * same dispatch — including `session.execution.interrupted`, which is what clears the
+ * spinner — is lost. Measured: double-Esc on a turn with a shell tool in flight left the
+ * prompt footer on `esc interrupt` and the tool row spinning, while the bridge had closed
+ * the turn and `/api/session/active` was empty.
+ */
+function toolFailedContent(text: string | undefined): { content?: Array<{ type: 'text'; text: string }> } {
+  return text ? { content: [{ type: 'text', text }] } : {};
 }
 
 /**

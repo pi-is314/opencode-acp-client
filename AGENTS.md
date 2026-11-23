@@ -177,7 +177,8 @@ pnpm e2e:protocol # = node scripts/e2e-protocol.mjs  ★ the ONLY end-to-end che
                   #   acp/default placeholder → model switch → interrupt shape
 pnpm e2e:agent    # = bash scripts/e2e-real-agent.sh  a real agent (AGENT=<command> is mandatory; no prompt by default)
 pnpm e2e:tui      # = bash scripts/e2e-real-tui.sh    the real opencode v2 TUI (tmux): assert against the screen + reload history
-                  #   the MODE=cancel mode exercises the cancel gesture (it hangs the agent on purpose; the real Escape must be pressed twice)
+                  #   the MODE=cancel mode exercises the cancel gesture (it hangs the agent on purpose, with a shell tool
+                  #   in flight whose `failed` arrives after the cancel, as a real agent's does; the real Escape must be pressed twice)
                   #   MODE=shell-history proves the !command card survives a reload (screen assertion)
                   #   MODE=patrol drives every slash command the TUI offers once (alive + no
                   #   UnexpectedStatus + a per-command snapshot)
@@ -194,7 +195,7 @@ pnpm e2e:dsh-acp # = bash scripts/e2e-dsh-acp.sh  ★ full acceptance against a 
                   #   `-s` resume (no replay). Archives the agent's test sessions; deliberately not in the gate.
 ```
 
-- **Test state (measured on this machine): 29 files / 434 passed / ★ 0 skipped.**
+- **Test state (measured on this machine): 29 files / 435 passed / ★ 0 skipped.**
   The README's status table is **hand-written**, so remember to sync it when you change the tests.
 - ★ **Do not introduce skips again.** The 6 skips that once existed were all in `tests/server.test.ts`: under vitest, reading SSE
   through **`fetch` buffers**, so the read never returns. **The fix is to switch to `node:http`** (a real socket), not to mark them skipped ✗ —

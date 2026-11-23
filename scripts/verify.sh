@@ -177,7 +177,7 @@ else
     || fail "e2e-real-tui (form): the captured panes are in ${ARTIFACTS_DIR:-$REPO/.artifacts}"
 
   step "e2e: real TUI, cancellation (Escape twice → session.interrupt)"
-  ARTIFACTS_DIR="${ARTIFACTS_DIR:-$REPO/.artifacts}" MODE=cancel FAKE_ENV="FAKE_ACP_HANG=1 FAKE_ACP_MODELS=1" \
+  ARTIFACTS_DIR="${ARTIFACTS_DIR:-$REPO/.artifacts}" MODE=cancel FAKE_ENV="FAKE_ACP_HANG=1 FAKE_ACP_HANG_TOOL=1 FAKE_ACP_MODELS=1" \
     bash scripts/e2e-real-tui.sh \
     || fail "e2e-real-tui (cancel): the captured panes are in ${ARTIFACTS_DIR:-$REPO/.artifacts}"
 

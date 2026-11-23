@@ -20,6 +20,7 @@
  *   FAKE_ACP_PLAN=1                  emit a plan update (todos)
  *   FAKE_ACP_PERMISSION=allow|reject ask for permission and require an answer
  *   FAKE_ACP_HANG=1                  never answer session/prompt (timeout test)
+ *   FAKE_ACP_HANG_TOOL=1             with HANG: a shell tool in flight, failed only AFTER the cancel
  *   FAKE_ACP_CALLBACK=fs/read_text_file   call back into the client
  *   FAKE_ACP_MODELS=1                session/new advertises a `model` config option
  *   FAKE_ACP_ADVERSARIAL_TOOL_ID=1   a tool call whose id looks like a content part (`reasoning:0`)
@@ -1111,7 +1112,34 @@ async function onMessage(msg) {
         }
       }
       if (process.env.FAKE_ACP_HANG === '1') {
-        hangingPrompts.set(sessionId, () => respond(msg.id, { stopReason: 'cancelled' }))
+        // ★ `FAKE_ACP_HANG_TOOL=1` reproduces what dsh does on a cancel: a shell tool is in
+        // flight when the turn is cancelled, the prompt answers `cancelled`, and only THEN does
+        // the tool's own terminal `failed` update arrive. That late update is the one that
+        // reached the client after `session.execution.interrupted`.
+        const withTool = process.env.FAKE_ACP_HANG_TOOL === '1'
+        if (withTool) {
+          update(sessionId, {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'call-hang',
+            title: 'bash',
+            kind: 'execute',
+            status: 'in_progress',
+            rawInput: { command: 'sleep 600' },
+          })
+        }
+        hangingPrompts.set(sessionId, () => {
+          respond(msg.id, { stopReason: 'cancelled' })
+          if (withTool) {
+            setTimeout(() => {
+              update(sessionId, {
+                sessionUpdate: 'tool_call_update',
+                toolCallId: 'call-hang',
+                status: 'failed',
+                rawOutput: { output: 'interrupted', isError: true },
+              })
+            }, 100)
+          }
+        })
         return
       }
       if (process.env.FAKE_ACP_STALE_PROMPT === '1' && !staleCleared.has(sessionId)) {

@@ -345,6 +345,28 @@ v2.0.18 的 ACP 看不见 `opencode.json` 里的 provider，v2.0.32 能看见，
 那个 agent。
 
 
+## 15. ★★ 一个"永远不回应"的假 agent 测不出取消的真问题——要让工具**正在跑**
+
+**现象**：`MODE=cancel` 在 4 个 TUI 版本上全绿，用户的真实会话里连按两次 Esc 后，输入框下方的 spinner
+和 tool 行的 spinner 却一直在转。桥这边一切正确：`prompt settled stopReason="cancelled"`、
+`session.execution.interrupted {reason:"user"}` 已发出、`/api/session/active` 为空。
+
+**原因**：取消时 tool 事件带了 `content: []`。spec 把它定义为 `NonEmptyArray`（`minItems: 1`），而
+opencode v2.3 的客户端在关闭图片预览（默认）时会用 `[r(n[0]), ...]` 改写 tool 内容，`r` 读取 `n[0].type`；
+遇到 `[]` 就是 `undefined.type`，处理函数抛出异常（TUI 日志：`uncaught exception … evaluating 'd.type'`），
+同一次分发里后面的 `session.execution.interrupted`——清掉 spinner 的那个事件——随之丢失。
+
+**为什么测试没抓到**：原来的取消场景只挂起 prompt，**没有在途的工具**，所以根本不会走到带 `content` 的
+tool 事件。真实 agent（dsh）取消时正有一个 shell 工具在跑，而且它自己的 `failed` 更新在取消**之后**才到。
+现在 `MODE=cancel` 默认带 `FAKE_ACP_HANG_TOOL=1` 复现这一点：修复前 ✗，修复后 4 个版本全 ✓。
+
+**排查要点**：屏幕和桥不一致时，先看 **TUI 自己的日志**
+（`~/.opencode-acp-client/opencode/<agent>/data/opencode/log/opencode.log`），而不是只看桥日志。
+定位 `d.type` 这类压缩后的名字，直接在已安装的二进制里搜（JS 是嵌在里面的），不要靠读另一个版本的源码猜。
+
+**规则**：取消测试必须让一个工具**正在运行**，并让 agent 的终态更新晚于取消到达。事件里的数组字段，
+spec 说非空就绝不能发 `[]`——没有内容时省略该字段，必填时给一条空文本。
+
 ## 自查清单
 
 改 `scripts/e2e-*.sh` 之后，逐条过一遍：
