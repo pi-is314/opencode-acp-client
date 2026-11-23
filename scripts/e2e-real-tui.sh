@@ -168,8 +168,14 @@ mkdir -p "$TUI_CONFIG_DIR"
 # v2.3.0 moved CLI config from `tui.json` to `cli.json` (packages/cli/src/config/config.ts:
 # `path.join(global.config, "cli.json")`); `tui.json` is read only to MIGRATE. Write both so
 # the pin holds on releases either side of that change.
-printf '{"session":{"verbosity":"high"}}\n' > "$TUI_CONFIG_DIR/cli.json"
-printf '{"session":{"verbosity":"high"}}\n' > "$TUI_CONFIG_DIR/tui.json"
+# ★ v2.4 opens a RELEASE HIGHLIGHTS screen once after an update ("Release highlights",
+# `app.highlights`, default on — packages/tui/src/app.tsx: it renders while the home screen is
+# idle and waits for `enter`). It sits on top of the composer, so a harness that waits for the
+# composer's placeholder hangs until its timeout and reports "the TUI never became ready" —
+# measured on v2.4.1 on both macOS and Linux. Turn it off for the harness (a user who wants it
+# keeps it): the same `highlights` key, at the top level of the config.
+printf '{"highlights":false,"session":{"verbosity":"high"}}\n' > "$TUI_CONFIG_DIR/cli.json"
+printf '{"highlights":false,"session":{"verbosity":"high"}}\n' > "$TUI_CONFIG_DIR/tui.json"
 export OPENCODE_CONFIG_DIR="$TUI_CONFIG_DIR"
 # The bridge writes a durable session-id map. This test uses fake agents and temporary
 # workspaces, so its map must not pollute the operator's ~/.opencode-acp-client state.
