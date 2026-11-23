@@ -880,7 +880,34 @@ async function onMessage(msg) {
               { value: 'suffixed-2', name: 'Suffixed Two' },
             ],
           }]
-        : process.env.FAKE_ACP_MODELS === '1' ? [modelOption('["fake","model-1"]')] : undefined
+        : process.env.FAKE_ACP_MODELS === '1'
+        ? [
+            modelOption('["fake","model-1"]'),
+            // ★ `FAKE_ACP_EFFORT=1` reproduces an agent that calls the reasoning-effort option
+            // `effort` — dsh's name for it. The bridge used to match only `thought_level` /
+            // `reasoning_effort`, so those variants never reached the picker and the user could
+            // not switch thinking on from the TUI.
+            ...(process.env.FAKE_ACP_EFFORT === '1'
+              ? [
+                  {
+                    id: 'effort',
+                    name: 'Effort',
+                    // ★ NOT `thought_level`: dsh leaves the category off entirely and names the
+                    // option `effort`. Matching on the category alone would still miss it, and
+                    // a fixture that set the category would let the narrow check pass.
+                    category: 'other',
+                    type: 'select',
+                    currentValue: 'off',
+                    options: [
+                      { value: 'off', name: 'off' },
+                      { value: 'high', name: 'high' },
+                      { value: 'max', name: 'max' },
+                    ],
+                  },
+                ]
+              : []),
+          ]
+        : undefined
       // The ACP-standard model list, which real agents (qwen, gemini, kimi) use
       // instead of an opencode-shaped config option.
       // ★ `FAKE_ACP_MODELS_SUFFIXED=1` reproduces codex-acp 2.8.0: the session's

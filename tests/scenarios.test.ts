@@ -4030,62 +4030,47 @@ describe('the session map file', () => {
   });
 });
 
-describe('--continue: the newest agent session imported before the TUI asks', () => {
-  it('serves the agent\'s latest session first, so the TUI\'s -c can navigate to it', async () => {
-    // The TUI\'s -c asks `GET /api/session?limit=1&order=desc` and navigates to
-    // row one. On a fresh bridge that list is empty — the conversations live in
-    // the agent — so "continue the last session" opened a blank conversation
-    // instead. The bridge imports the agent\'s sessions (its session/list) when
-    // -c is passed, before the TUI asks; the adopt→load chain then replays the
-    // history exactly as an explicitly resumed tab does.
+describe('--continue: what the agent lists is NOT adopted', () => {
+  it('leaves a session the map has never paired out of the list the TUI reads', async () => {
+    // ★ This used to assert the opposite, and that was the bug.
+    //
+    // `GET /api/session` — which the TUI issues at startup — ran session discovery and gave
+    // every titled session an alias, so `-c` would find the agent's conversations. With an
+    // agent that keeps private ones, it adopted those too: measured against
+    // `dsh --profile martty-acp`, 21 of 22 listed sessions were dsh's own, titled
+    // "You are a careful implementer.". They became tabs, `-c` restored them, and cleaning
+    // the map did not hold — the next launch wrote them back.
+    //
+    // `-c` now works off the map alone: the id it needs was recorded when that conversation
+    // was actually used.
     const url = await start('rich-turn', {
       FAKE_ACP_CAPS_LIST_SESSIONS: '1',
       FAKE_ACP_CAPS_LOAD_SESSION: '1',
       FAKE_ACP_REPLAY_ON_LOAD: '1',
     });
     const listed = (await (await fetch(`${url}/api/session`)).json()) as {
-      data: Array<{ id: string }>;
+      data: Array<{ id: string; title?: string }>;
     };
-    expect(listed.data.some((row) => row.id === 'ses_acp_listedagentsession1')).toBe(true);
-    // And the discovery holds: the session loads with its replayed content when
-    // the TUI navigates to it (the /message route adopts and loads).
-    const id = listed.data.find((row) => row.id === 'ses_acp_listedagentsession1')!.id;
-    await fetch(`${url}/api/session/${id}`);
-    await fetch(`${url}/api/session/${id}/message`);
-    const transcript = (await (await fetch(`${url}/api/session/${id}/message?limit=5&order=desc`)).json()) as {
-      data: Array<{ type?: string }>;
-    };
-    expect(transcript.data.length).toBeGreaterThan(0);
+    expect(listed.data.some((row) => row.id === 'ses_acp_listedagentsession1')).toBe(false);
+    expect(listed.data.some((row) => row.title === 'Imported old conversation')).toBe(false);
   });
 });
 
 describe('titled sessions discovered from stable ACP session/list', () => {
-  it('gives an old agent conversation a ses_ alias, title, map entry and load path', async () => {
+  it('does not adopt a titled agent session the map has never paired', async () => {
+    // The list is still REQUESTED — a resumed session needs it to find its agent id — but
+    // nothing is adopted. See the `--continue` block above for why.
     const url = await start('rich-turn', {
       FAKE_ACP_CAPS_LIST_SESSIONS: '1',
       FAKE_ACP_CAPS_LOAD_SESSION: '1',
     });
-    const stream = collectSse(`${url}/api/event`, 4000);
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => setTimeout(resolve, 400));
     const listed = (await (await fetch(`${url}/api/session`)).json()) as {
       data: Array<{ id: string; title?: string; acpSessionId?: string }>;
     };
-    const imported = listed.data.find((session) => session.title === 'Imported old conversation');
-    expect(imported).toBeDefined();
-    expect(imported!.id).toMatch(/^ses_/);
-    expect(imported!.acpSessionId).toBe('listed-agent-session-1');
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    stream.stop();
-    const created = stream.frames
-      .map((frame) => JSON.parse(frame) as { type: string; data?: { sessionID?: string; session?: { title?: string } } })
-      .find((event) => event.type === 'session.created' && event.data?.sessionID === imported!.id);
-    expect(created?.data?.session?.title).toBe('Imported old conversation');
-
-    // The tab the client sees now has an alias that maps back to the agent's real id;
-    // opening its transcript therefore calls stable session/load rather than creating a
-    // blank new agent session.
-    await fetch(`${url}/api/session/${imported!.id}/message`);
-    expect(logs.some((line) => line.includes("history: asking the agent to load 'listed-agent-session-1'"))).toBe(true);
+    // The title is the fixture's own: `session/list` offered it with that name, and the
+    // bridge used to adopt it under a `ses_acp_…` alias.
+    expect(listed.data.find((session) => session.title === 'Imported old conversation')).toBeUndefined();
   });
 });
 

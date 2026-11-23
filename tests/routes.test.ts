@@ -230,6 +230,22 @@ describe('v2.2.0 additions', () => {
   });
 });
 
+describe('the reasoning-effort option reaches the model picker', () => {
+  it('reads an option the agent calls `effort`, not only `thought_level`', async () => {
+    // ★ The option's name belongs to the agent; only its category is the spec's. Matching the
+    // name alone made `dsh --profile martty-acp` (which calls it `effort`) show no variants at
+    // all, so thinking could not be switched on from the TUI and the session stayed silent.
+    const url = await start({ FAKE_ACP_MODELS: '1', FAKE_ACP_EFFORT: '1' });
+    // The variants are read from a LIVE session's config options, so one has to exist.
+    await createSession(url);
+    const models = (await (await fetch(`${url}/api/model`)).json()) as {
+      data: Array<{ providerID?: string; variants?: Array<{ id: string }> }>;
+    };
+    const real = models.data.find((model) => model.providerID !== 'acp');
+    expect(real?.variants?.map((variant) => variant.id)).toEqual(['off', 'high', 'max']);
+  });
+});
+
 describe('naming the agent when it does not name itself', () => {
   it('shows the launch command, masked and capped', () => {
     // ACP makes `agentInfo` a SHOULD, so an agent that says nothing used to appear as

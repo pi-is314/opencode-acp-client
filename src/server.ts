@@ -2963,9 +2963,23 @@ export class BridgeServer {
           // so an unmapped session titled milliseconds after the connection
           // spawned is a shell with near-certainty. Skip it: it never reaches
           // the TUI's list, so -c cannot pick it.
-          const visibleId =
-            this.sessionMap.visibleIdFor(session.sessionId, directory) ??
-            `ses_acp_${session.sessionId.replace(/[^A-Za-z0-9]/g, '')}`;
+          // ★ The map decides, and ONLY the map.
+          //
+          // The `?? \`ses_acp_${…}\`` fallback gave an alias to EVERY titled session the
+          // agent listed, so the agent's own private conversations were adopted as this
+          // bridge's. Measured with `dsh --profile martty-acp`: `session/list` returns 22
+          // sessions for one directory, 21 of them titled "You are a careful implementer."
+          // — dsh's internal ones. Every one became a map row, a TUI tab and a
+          // `session.created` event; `-c` then restored them beside the conversation the
+          // user wanted, and the ghost tab was frequently the one focused.
+          //
+          // This runs on `GET /api/session`, which the TUI issues at startup, so the
+          // pollution re-appeared on every launch and survived cleaning the map — the only
+          // fix is to stop inventing ids. A session the map does not pair was never created
+          // through this bridge, and ACP gives no way to tell a user's conversation from an
+          // agent's own, so adopting either means adopting both.
+          const visibleId = this.sessionMap.visibleIdFor(session.sessionId, directory);
+          if (!visibleId) continue;
           const record = this.state.createSession(location, title, visibleId);
           record.directory = directory;
           record.acpSessionId = session.sessionId;
@@ -4131,7 +4145,20 @@ export class BridgeServer {
     for (const { record, agent } of live) {
       for (const option of agent.configOptionsFor(record.acpSessionId)) {
         const optionId = option.id ?? option.configId;
-        if (option.category !== 'thought_level' && optionId !== 'reasoning_effort') continue;
+        // ★ The option's NAME is the agent's to choose; its CATEGORY is the spec's.
+        //
+        // Matching only `thought_level` / `reasoning_effort` made an agent that calls the same
+        // idea `effort` invisible: `dsh --profile martty-acp` offers `effort = off | high |
+        // max`, none of it reached the picker, and there was no way to switch thinking on from
+        // the TUI at all. The agent stayed on `off`, so its `agent_thought_chunk` updates —
+        // which dsh-acp does emit for a `reasoning` block — never had anything to carry, and
+        // the session showed no thoughts. `category` is the spec's stable vocabulary, so that
+        // is what this matches on; the id checks stay for agents that only set a name.
+        const isEffort =
+          option.category === 'thought_level' ||
+          optionId === 'reasoning_effort' ||
+          optionId === 'effort';
+        if (!isEffort) continue;
         for (const entry of option.options ?? []) {
           const isGroup = Array.isArray((entry as SessionConfigSelectGroup).options);
           const choices = isGroup ? ((entry as SessionConfigSelectGroup).options ?? []) : [entry];

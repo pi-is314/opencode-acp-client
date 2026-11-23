@@ -194,7 +194,7 @@ pnpm e2e:dsh-acp # = bash scripts/e2e-dsh-acp.sh  ★ full acceptance against a 
                   #   `-s` resume (no replay). Archives the agent's test sessions; deliberately not in the gate.
 ```
 
-- **Test state (measured on this machine): 29 files / 433 passed / ★ 0 skipped.**
+- **Test state (measured on this machine): 29 files / 434 passed / ★ 0 skipped.**
   The README's status table is **hand-written**, so remember to sync it when you change the tests.
 - ★ **Do not introduce skips again.** The 6 skips that once existed were all in `tests/server.test.ts`: under vitest, reading SSE
   through **`fetch` buffers**, so the read never returns. **The fix is to switch to `node:http`** (a real socket), not to mark them skipped ✗ —
