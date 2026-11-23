@@ -230,6 +230,14 @@ describe('AcpTranslator', () => {
     // turn the user cancelled.
     expect(types).not.toContain('session.execution.succeeded');
     expect(types).not.toContain('session.execution.failed');
+    // ★ The event carries a `reason`, and the spec requires one
+    // (`user | shutdown | superseded | inactivity`). It used to send only `sessionID`, which
+    // the client cannot decode — it dropped the event and kept its spinner turning, so a
+    // cancel that had worked looked like it had done nothing.
+    const interrupted = events.find((event) => event.type === 'session.execution.interrupted') as
+      | { data?: { reason?: unknown } }
+      | undefined;
+    expect(interrupted?.data?.reason).toBe('user');
   });
 
   it('records an error on the assistant message when the turn fails', () => {

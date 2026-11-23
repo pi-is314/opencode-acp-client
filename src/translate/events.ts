@@ -386,9 +386,23 @@ export class AcpTranslator {
         : opts.interrupted
           ? EVENT.executionInterrupted
           : EVENT.executionSucceeded;
+      // ★ `session.execution.interrupted` REQUIRES a `reason`
+      // (`sessionID` + `reason: user | shutdown | superseded | inactivity`).
+      //
+      // Only `sessionID` was sent, and the event was unusable: the client's handler branches on
+      // `event.data.reason === "shutdown"`, so the field is part of the contract, not decoration.
+      // Measured on a real session: the bridge logged `prompt settled stopReason="cancelled"`,
+      // the turn ended and later Esc presses answered `{interrupted:false}` — all correct — while
+      // the screen kept its spinner, so the user's verdict was "cancel does not work".
+      //
+      // `user` is the right reason for this path: it only fires because someone asked to stop.
+      // The other outcomes carry an `error` instead and have no `reason` field.
       this.sink.emit({
         type: outcome,
-        data: { sessionID: record.session.id, error: opts.error },
+        data:
+          outcome === EVENT.executionInterrupted
+            ? { sessionID: record.session.id, reason: 'user' }
+            : { sessionID: record.session.id, error: opts.error },
         location: this.location,
       });
     }
@@ -1060,7 +1074,12 @@ export class AcpTranslator {
           // renders `stripAnsi(props.part.state.error.message)`. A bare string there made
           // that read `undefined` and the whole TUI died with
           // "Expected a `string`, got `undefined`" the moment any tool failed.
-          error: { type: 'tool', message: toolError(update) ?? String(toolResult ?? 'tool failed') },
+          // ★ Never `String(anObject)`. `part.state.output` is the tool's RAW output, which
+          // is frequently a record (`{formatted_output, exit_code}` from a shell, a JSON error
+          // body from a backend), and `String({})` is the literal text "[object Object]" —
+          // which is what a user saw on a failed tool card. `displayText` keeps a string as it
+          // is and serialises anything else; the fallback only applies when there is nothing.
+          error: { type: 'tool', message: toolError(update) ?? displayText(toolResult) ?? 'tool failed' },
           metadata: toolMetadata(update),
           content:
             part.type === 'tool' && part.state.error !== undefined
@@ -1145,6 +1164,27 @@ export function toolMetadata(update: SessionUpdate): Record<string, unknown> {
 function pickOutput(update: SessionUpdate): { output?: string } {
   const output = toolOutput(update);
   return output === undefined ? {} : { output };
+}
+
+/**
+ * A human-readable string for a tool's raw output.
+ *
+ * `String(value)` is wrong for anything but a primitive: the bridge's tool output is often an
+ * object (`{formatted_output, exit_code}`), and the user saw exactly `[object Object]` on a
+ * failed card. JSON keeps the fields visible; an empty object yields undefined so the caller's
+ * own fallback applies instead of a meaningless `{}`.
+ */
+function displayText(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'string') return value.length > 0 ? value : undefined;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try {
+    const text = JSON.stringify(value);
+    if (text && text !== '{}' && text !== '[]') return text;
+  } catch {
+    /* a cyclic record cannot be rendered */
+  }
+  return undefined;
 }
 
 export function toolError(update: SessionUpdate): string | undefined {
