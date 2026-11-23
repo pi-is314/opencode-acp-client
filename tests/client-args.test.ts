@@ -587,6 +587,33 @@ describe('agent command preflight', () => {
     });
   });
 
+  // ★ On Windows a command is a FILE NAME WITH AN EXTENSION, and the search must try
+  // `PATHEXT` the way the shell does. Asking for the bare name meant an extensionless command
+  // (`node`) was reported as "agent command not found" while `node.exe` sat on PATH — measured
+  // on the Windows VM with `oc-acp-client -- node tests/fake-acp-agent.mjs`.
+  it('finds a bare command name through PATHEXT', () => {
+    // `process.platform` decides whether PATHEXT is consulted, so the Windows expectation is
+    // asserted ON Windows: here, on macOS/Linux, the same lookup must NOT match `node.exe`.
+    const dir = mkdtempSync(join(tmpdir(), 'path-'));
+    try {
+      // The file carries the extension on BOTH platforms, so the POSIX run really does prove
+      // that a bare name does not match it there.
+      const withExtension = join(dir, 'probe-agent.EXE');
+      writeFileSync(withExtension, 'binary', { mode: 0o755 });
+      const env = { PATH: dir, PATHEXT: '.COM;.EXE;.BAT;.CMD' };
+      if (process.platform === 'win32') {
+        expect(findExecutable('probe-agent', env)).toBe(withExtension);
+        // An explicit extension is tried as given and never re-appended.
+        expect(findExecutable('probe-agent.EXE', env)).toBe(withExtension);
+      } else {
+        // No PATHEXT on POSIX: the bare name must resolve to nothing when only `.EXE` exists.
+        expect(findExecutable('probe-agent', { PATH: dir })).toBeUndefined();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // ★ Windows has no executable bit: `access(X_OK)` succeeds on any existing file, so a
   // plain text file IS "runnable" there. The POSIX expectation is asserted on POSIX only;
   // on Windows the same fixture asserts the thing that actually matters — a name that is

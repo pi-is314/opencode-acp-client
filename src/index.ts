@@ -983,10 +983,25 @@ export function findExecutable(
     return executable(target) ? target : undefined;
   }
 
+  // ★ On Windows a command is a FILE NAME WITH AN EXTENSION. This loop asked for the bare
+  // `node`, which does not exist — the machine has `node.exe` — so every extensionless command
+  // was reported as "agent command not found" while sitting on PATH. Measured on the Windows VM:
+  // `oc-acp-client -- node tests/fake-acp-agent.mjs` refused to start with `node` on PATH.
+  //
+  // `PATHEXT` is Windows' own list, in its own order, and the shell searches it the same way;
+  // an explicit extension (`agent.exe`, `run.cmd`) is tried as given and never re-appended.
+  const extensions =
+    process.platform === 'win32'
+      ? ['', ...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter((ext) => ext.length > 0)]
+      : [''];
+  const hasExtension = command.includes('.');
   for (const dir of (env.PATH ?? '').split(delimiter)) {
     if (!dir) continue;
-    const candidate = join(dir, command);
-    if (executable(candidate)) return candidate;
+    for (const extension of extensions) {
+      if (extension !== '' && hasExtension) continue;
+      const candidate = join(dir, command + extension);
+      if (executable(candidate)) return candidate;
+    }
   }
   return undefined;
 }
