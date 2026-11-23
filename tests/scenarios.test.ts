@@ -2811,6 +2811,56 @@ describe('the model switch the client announces', () => {
   });
 });
 
+describe('the /thinking pick (model.variant) reaches the agent', () => {
+  // ★ The TUI's `/thinking` posts the SAME model with a `variant`. The bridge read only the
+  // model id, saw it unchanged, answered "already selected" with 204, and never told the
+  // agent — measured on `dsh --profile martty-acp`: the owner picked `max`, the agent stayed on
+  // `effort = off`, and no thought ever appeared. The pick must become
+  // `session/set_config_option effort=<variant>`, and the agent's answer must carry it.
+  it('switches the effort option even when the model is unchanged', async () => {
+    const server = new BridgeServer({
+      command: process.execPath,
+      args: [FAKE_AGENT],
+      directory: process.cwd(),
+      port: 0,
+      env: { FAKE_ACP_MODELS: '1', FAKE_ACP_EFFORT: '1' },
+      onLog: (line) => logs.push(line),
+    });
+    servers.push(server);
+    const { host, port } = await server.listen();
+    const url = `http://${host}:${port}`;
+    const created = (await (
+      await fetch(`${url}/api/session`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ location: { directory: process.cwd() } }),
+      })
+    ).json()) as { data: { id: string } };
+    const session = created.data.id;
+    await fetch(`${url}/api/session/${session}/message`).catch(() => undefined);
+
+    const response = await fetch(`${url}/api/session/${session}/model`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: { providerID: 'fake', id: 'model-1', variant: 'max' } }),
+    });
+    expect(response.status).toBe(204);
+    const all = logs.join('\n');
+    // The agent itself confirmed it — not just "we sent something".
+    expect(all).toMatch(/\[fake\] set effort=max/);
+    expect(all).toMatch(/\[bridge\] effort -> max/);
+
+    // A repeat of the same pick is a no-op at the agent.
+    logs.length = 0;
+    await fetch(`${url}/api/session/${session}/model`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: { providerID: 'fake', id: 'model-1', variant: 'max' } }),
+    });
+    expect(logs.join('\n')).not.toMatch(/\[fake\] set effort=/);
+  });
+});
+
 describe('a model switch to the model already selected', () => {
   it('answers 204 without calling the agent', async () => {
     // Measured on a real agent (both backend profiles): `session/set_config_option`

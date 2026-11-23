@@ -185,7 +185,7 @@ pnpm e2e:dsh-acp # = bash scripts/e2e-dsh-acp.sh  ★ 真 agent 全功能验收�
                   #   跑完自动归档 dsh 的测试会话；不在总闸里（需要真 agent，见 e2e-real-agent 的同类约定）
 ```
 
-- **测试现状（本机实测）：29 文件 / 435 passed / ★ 0 skipped。**
+- **测试现状（本机实测）：29 文件 / 436 passed / ★ 0 skipped。**
   README 的状态表是**手写的**，改动测试时记得同步它。
 - ★ **不要引入 skip，也不要用 `fetch` 读 SSE。** vitest 下 `fetch` 会缓冲，读永远不返回；
   **用 `node:http`**（真 socket）。两个连带的事实：① 订阅是异步建立的，先 `openStream` 后立刻动作会丢掉最早的事件

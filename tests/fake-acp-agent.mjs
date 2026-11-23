@@ -206,6 +206,25 @@ function childUpdate(fields) {
   })
 }
 
+// `FAKE_ACP_EFFORT=1`: an agent that calls the reasoning-effort option `effort` — dsh's name.
+// ★ NOT `thought_level`: dsh leaves the category off and names the option `effort`, so a
+// fixture that set the category would let a name-blind check pass.
+let effortValue = 'off'
+function effortOption() {
+  return {
+    id: 'effort',
+    name: 'Effort',
+    category: 'other',
+    type: 'select',
+    currentValue: effortValue,
+    options: [
+      { value: 'off', name: 'off' },
+      { value: 'high', name: 'high' },
+      { value: 'max', name: 'max' },
+    ],
+  }
+}
+
 function update(sessionId, u) {
   notify('session/update', { sessionId, update: u })
 }
@@ -888,25 +907,7 @@ async function onMessage(msg) {
             // `effort` — dsh's name for it. The bridge used to match only `thought_level` /
             // `reasoning_effort`, so those variants never reached the picker and the user could
             // not switch thinking on from the TUI.
-            ...(process.env.FAKE_ACP_EFFORT === '1'
-              ? [
-                  {
-                    id: 'effort',
-                    name: 'Effort',
-                    // ★ NOT `thought_level`: dsh leaves the category off entirely and names the
-                    // option `effort`. Matching on the category alone would still miss it, and
-                    // a fixture that set the category would let the narrow check pass.
-                    category: 'other',
-                    type: 'select',
-                    currentValue: 'off',
-                    options: [
-                      { value: 'off', name: 'off' },
-                      { value: 'high', name: 'high' },
-                      { value: 'max', name: 'max' },
-                    ],
-                  },
-                ]
-              : []),
+            ...(process.env.FAKE_ACP_EFFORT === '1' ? [effortOption()] : []),
           ]
         : undefined
       // The ACP-standard model list, which real agents (qwen, gemini, kimi) use
@@ -972,6 +973,20 @@ async function onMessage(msg) {
         // 204 (measured with dsh: the TUI showed the picked model, the session kept the old
         // one, and the only trace was a log line).
         respondError(msg.id, -32602, 'Invalid params: model switch refused by the fixture')
+        return
+      }
+      // ★ The effort option (`FAKE_ACP_EFFORT=1`) is a separate config id; accept only the
+      // values it advertised, and answer with the full state carrying the new value — which
+      // is what lets a test assert the agent really moved, not just that a request was sent.
+      if (msg.params?.configId === 'effort') {
+        const levels = ['off', 'high', 'max']
+        if (!levels.includes(msg.params?.value)) {
+          respondError(msg.id, -32602, `Invalid params: effort must be one of ${levels.join(', ')}`)
+          return
+        }
+        effortValue = msg.params.value
+        process.stderr.write(`[fake] set effort=${effortValue}\n`)
+        respond(msg.id, { configOptions: [modelOption('["fake","model-1"]'), effortOption()] })
         return
       }
       const advertised = ['["fake","model-1"]', '["fake","model-2"]']

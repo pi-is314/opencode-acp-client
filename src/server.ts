@@ -2291,8 +2291,15 @@ export class BridgeServer {
     // (`id: "model"`) whose values are JSON array strings `["provider","model"]`,
     // so the switch has to travel as `session/set_config_option`.
     if (rest === '/model' && method === 'POST') {
-      const picked = (body ?? {}) as { model?: { providerID?: string; id?: string; modelID?: string } };
+      const picked = (body ?? {}) as {
+        model?: { providerID?: string; id?: string; modelID?: string; variant?: string };
+      };
       const providerID = picked.model?.providerID;
+      // ★ The TUI's `/thinking` (variant picker) arrives HERE, as `model.variant`, not as a
+      // separate route. It used to be ignored: the model id was unchanged, so the "already
+      // selected" guard below answered 204 without calling the agent, and a session the
+      // owner set to `max` stayed on the agent's `effort = off` — no reasoning, no thoughts.
+      const variant = typeof picked.model?.variant === 'string' ? picked.model.variant : undefined;
       const raw = picked.model?.modelID ?? picked.model?.id;
       const modelID = raw?.includes('/') ? raw.slice(raw.indexOf('/') + 1) : raw;
       // The placeholder `the backend/default` exists so the composer is never empty
@@ -2356,6 +2363,7 @@ export class BridgeServer {
         if (current && current.providerID === providerID && current.modelID === modelID) {
           this.log(`[bridge] /model: ${providerID}/${modelID} is already selected; not calling the agent`);
           record.model = { providerID, modelID };
+          await this.applyVariant(record, agent, acpSessionId, variant);
           noContent();
           return;
         }
@@ -2408,6 +2416,7 @@ export class BridgeServer {
         await agent.setConfig(acpSessionId, 'model', wanted ?? `${providerID}/${modelID}`);
         record.model = { providerID, modelID };
         this.log(`[bridge] model -> ${providerID}/${modelID}`);
+        await this.applyVariant(record, agent, acpSessionId, variant);
       } catch (err) {
         // ★ Do not answer 204 when the agent refused the switch. It used to: the TUI then
         // showed the picked model while the session stayed on the old one — measured with
@@ -2859,6 +2868,37 @@ export class BridgeServer {
    * Markers (`[no history] …`) are display decoration added at restore time and are
    * never persisted.
    */
+  /**
+   * Apply the TUI's `/thinking` pick (`model.variant`) to the agent's effort option.
+   *
+   * Sent as `session/set_config_option` on the option `isEffortOption` finds, with the
+   * variant id as the value — the same values the picker was given. Skipped when the agent
+   * already reports that value, and when there is no effort option at all (an agent without
+   * one cannot have offered the variant). A refusal is thrown to the caller, which answers
+   * 400 with the agent's own message rather than a 204 that would let the TUI claim a level
+   * the session is not on.
+   */
+  private async applyVariant(
+    record: SessionRecord,
+    agent: AcpClient,
+    acpSessionId: string,
+    variant: string | undefined,
+  ): Promise<void> {
+    if (!variant) return;
+    const option = agent.configOptionsFor(record.acpSessionId).find(isEffortOption);
+    if (!option) {
+      this.log(`[bridge] /model: variant '${variant}' asked for, but this agent has no effort option`);
+      return;
+    }
+    const configId = String(option.id ?? option.configId);
+    if (option.currentValue === variant) {
+      this.log(`[bridge] /model: ${configId} is already '${variant}'`);
+      return;
+    }
+    await agent.setConfig(acpSessionId, configId, variant);
+    this.log(`[bridge] ${configId} -> ${variant}`);
+  }
+
   private persistTitle(record: SessionRecord): void {
     const title = record.session.title;
     if (!title || !record.acpSessionId) return;
@@ -4157,11 +4197,7 @@ export class BridgeServer {
         // which dsh-acp does emit for a `reasoning` block — never had anything to carry, and
         // the session showed no thoughts. `category` is the spec's stable vocabulary, so that
         // is what this matches on; the id checks stay for agents that only set a name.
-        const isEffort =
-          option.category === 'thought_level' ||
-          optionId === 'reasoning_effort' ||
-          optionId === 'effort';
-        if (!isEffort) continue;
+        if (!isEffortOption(option)) continue;
         for (const entry of option.options ?? []) {
           const isGroup = Array.isArray((entry as SessionConfigSelectGroup).options);
           const choices = isGroup ? ((entry as SessionConfigSelectGroup).options ?? []) : [entry];
@@ -5376,6 +5412,16 @@ export function sessionListQuery<T extends { id: string; title?: string; parentI
   );
   if (Number.isFinite(limit) && limit > 0) rows = rows.slice(0, limit);
   return rows;
+}
+
+/**
+ * Whether a config option is the agent's reasoning effort — the one the TUI shows as model
+ * `variants` and `/thinking` picks from. One predicate for both directions, so the picker's
+ * list and the switch that applies a pick can never disagree about which option it is.
+ */
+function isEffortOption(option: SessionConfigOption): boolean {
+  const optionId = option.id ?? option.configId;
+  return option.category === 'thought_level' || optionId === 'reasoning_effort' || optionId === 'effort';
 }
 
 function modelFromConfigOptions(
