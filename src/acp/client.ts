@@ -1007,9 +1007,22 @@ export class AcpClient extends EventEmitter<AcpEvents> {
  * with spaces, while the verbatim form passes our quoting through untouched. Only used when
  * the command actually needs it — an `.exe` agent keeps the direct spawn.
  */
-function launchSpec(command: string, args: string[]): { file: string; args: string[]; verbatim: boolean } {
+export function launchSpec(command: string, args: string[]): { file: string; args: string[]; verbatim: boolean } {
   if (process.platform !== 'win32') return { file: command, args, verbatim: false };
-  // A `.cmd`/`.bat` (or a bare name, which PATH may resolve to one) has to go through cmd.
+  // ★ A SCRIPT IS NOT AN EXECUTABLE on Windows. `node tests/agent.mjs` works there, but
+  // spawning `tests/agent.mjs` directly fails with `spawn EFTYPE` — Windows has no shebang
+  // dispatch, so the file is not a runnable image however executable it looks on POSIX. Measured
+  // by the entry e2e from Git Bash: `OPENCODE_BIN=/c/oac/tests/fake-opencode-tui.mjs` made the
+  // bridge die with `spawn EFTYPE` and the TUI's exit code never propagate.
+  //
+  // `.cmd`/`.bat` (and a bare name, which PATH may resolve to one) go through cmd; a known
+  // script extension goes through the interpreter that owns it.
+  const script = /\.(mjs|cjs|js)$/i.test(command)
+    ? process.execPath
+    : /\.py$/i.test(command)
+      ? 'python'
+      : undefined;
+  if (script !== undefined) return { file: script, args: [command, ...args], verbatim: false };
   const needsShell = !/\.[A-Za-z0-9]+$/.test(command) || /\.(cmd|bat)$/i.test(command);
   if (!needsShell) return { file: command, args, verbatim: false };
   const quote = (value: string): string => (/\s/.test(value) ? `"${value}"` : value);

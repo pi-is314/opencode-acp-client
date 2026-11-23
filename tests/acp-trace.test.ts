@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { AcpClient } from '../src/acp/client.js';
+import { AcpClient, launchSpec } from '../src/acp/client.js';
 
 const FAKE_AGENT = fileURLToPath(new URL('./fake-acp-agent.mjs', import.meta.url));
 
@@ -100,5 +100,33 @@ describe('the ACP trace', () => {
     const sent = lines.filter((line) => line.startsWith('[send] '));
     expect(sent.length).toBeGreaterThan(0);
     expect(Math.max(...sent.map((line) => line.length))).toBeLessThan(4_100);
+  });
+});
+
+describe('launching an agent on Windows', () => {
+  // ★ A script is not an executable there: Windows has no shebang dispatch, so spawning
+  // `tests/agent.mjs` directly fails with `spawn EFTYPE`. Measured by the entry e2e driven from
+  // Git Bash, whose `/c/oac/tests/fake-opencode-tui.mjs` took the whole bridge down.
+  //
+  // The platform decides the answer, so each expectation is asserted ON the platform it is about;
+  // on POSIX the pass-through is the contract (a script with a shebang and +x runs itself).
+  it('routes a script file through its interpreter instead of execing it', () => {
+    const spec = launchSpec('/c/oac/tests/agent.mjs', ['--flag']);
+    if (process.platform === 'win32') {
+      // `process.execPath` is this node; a `.mjs` must be handed to it, never exec'd.
+      expect(spec.file).toBe(process.execPath);
+      expect(spec.args).toEqual(['/c/oac/tests/agent.mjs', '--flag']);
+      expect(spec.verbatim).toBe(false);
+    } else {
+      expect(spec.file).toBe('/c/oac/tests/agent.mjs');
+      expect(spec.args).toEqual(['--flag']);
+    }
+  });
+
+  it('leaves a real executable alone', () => {
+    const spec = launchSpec('/usr/bin/opencode', ['--version']);
+    expect(spec.file).toBe('/usr/bin/opencode');
+    expect(spec.args).toEqual(['--version']);
+    expect(spec.verbatim).toBe(false);
   });
 });
