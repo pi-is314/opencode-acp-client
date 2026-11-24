@@ -22,6 +22,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, '');
 const ENTRY = join(ROOT, 'dist', 'index.js');
@@ -48,13 +49,12 @@ if (process.platform !== 'win32') {
   process.exit(0);
 }
 
-let pty;
-try {
-  pty = (await import('node-pty')).default;
-} catch {
-  console.error('  ✗ node-pty is not installed: pnpm add -D node-pty && pnpm rebuild node-pty');
-  process.exit(1);
-}
+// ★ `createRequire`, not `await import()`. node-pty is a native CJS addon, and under pnpm a
+// dependency that is not the project's own is reachable through a symlinked store path that
+// `require` follows and the ESM resolver does not: measured on the Windows VM, `require('node-pty')`
+// loaded fine while `import('node-pty')` answered `Cannot find package 'node-pty'`, which this
+// script reported as "not installed" and failed the gate's last step.
+const pty = createRequire(import.meta.url)('node-pty');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const work = mkdtempSync(join(tmpdir(), 'oac-todo-win-'));
