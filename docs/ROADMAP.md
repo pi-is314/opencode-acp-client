@@ -146,10 +146,20 @@ has a home in `docs/`.
 [Kagura-0001/lucid](https://github.com/Kagura-0001/lucid) — both lead with a logo, a screenshot
 and a short pitch, and leave the depth to pages below.
 
-**Also the logo**: the GitHub project page needs one too (the project has none today), in the
-same spirit as opencode's — a mark that reads at 40px and works on light and dark. It belongs with
-this rewrite because the README leads with it and the two must be the same mark: the file the
-repository page uses is the file the README shows.
+**Also the logo**: a mark in the same spirit as opencode's — one that reads at 40px and works on
+light and dark. `logo.png` / `logo.svg` at the repository root are that mark, and the README leads
+with it.
+
+★ **What a file at the root does NOT do** (measured 2026-11-24, when the repository icon did not
+change after `logo.png` was pushed): **GitHub does not take a repository avatar from it.** A
+repository has no avatar of its own — its icon in a list is the owner's avatar, an organisation's
+icon is set on the organisation, and a personal account's is the account's. There is no field in a
+repository's Settings for it. Earlier revisions of this page said "the file the repository page
+uses is the file the README shows", which was wrong.
+
+What the root files do serve: the README (via `<img>`), and the **social preview / Open Graph
+card**, which is uploaded separately under Settings → Social preview and is a **1280x640** image —
+a different asset from the 1:1 `logo.png` here, and not generated yet.
 
 **Constraints**:
 
