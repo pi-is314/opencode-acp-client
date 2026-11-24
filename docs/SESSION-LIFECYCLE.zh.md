@@ -282,7 +282,7 @@ agent 原生 UUID 照旧放行（`-s` 允许它，由 agent 自己判断）。
 | agent 宣告 | 我们做什么 | tab 标题 | 屏幕上是什么 |
 |---|---|---|---|
 | `loadSession` | `session/load`，回放变成 transcript | 不动（agent 给的标题优先） | 历史在 |
-| 只有 `resume`（dsh 的 plain `acp` 就是这样） | `session/resume`：重连同一个会话，**不重放历史** | 保留**真名**（无标记） | 空（规范如此），但会话区会多一条 `◈ Notice`：`Resumed without showing history: this agent has no session/load capability`——把「agent 读不了历史」说清楚，而不是让人以为「没有历史」。★ 上下文是否还在**不保证**：同一 profile 实测两种都有（换模型后一次记得、一次不记得）——两种说法都不要写死 |
+| 只有 `resume`（dsh 的 plain `acp` 就是这样） | `session/resume`：重连同一个会话，**不重放历史** | 保留**真名**（无标记） | 空（规范如此），但会话区会多一条 `◈ Notice`：`Resumed without showing history: this agent "<agent command>" has no session/load capability`——把「agent 读不了历史」说清楚，而不是让人以为「没有历史」。★ 上下文是否还在**不保证**：同一 profile 实测两种都有（换模型后一次记得、一次不记得）——两种说法都不要写死 |
 | 两者都没有 | 两个方法都不调，如实记「无法恢复」，起一个新会话 | `[new conversation] <目录名>` | 空，但明确是**新对话** |
 
 ★ 标记是**幂等**的：`markTitle` 先剥掉旧标记（含历史的 `[not resumed]`）再加新的，

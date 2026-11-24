@@ -60,7 +60,7 @@ oc-acp-client -- dsh --profile acp      # profile 名只是本机示例
 
 | 缺的能力 | 在本项目里的表现 |
 |---|---|
-| `loadSession` | **恢复成功但没有历史**：`-s` 走 `session/resume`（重连同一会话、不重放），tab **保留真名**（无标记），会话区多一条 `◈ Notice`：**`Resumed without showing history: this agent has no session/load capability`**。上下文是否还在**不保证**：同一 profile 实测两种都有（换模型后一次记得、一次不记得）。 |
+| `loadSession` | **恢复成功但没有历史**：`-s` 走 `session/resume`（重连同一会话、不重放），tab **保留真名**（无标记），会话区多一条 `◈ Notice`：**`Resumed without showing history: this agent "<agent command>" has no session/load capability`**。上下文是否还在**不保证**：同一 profile 实测两种都有（换模型后一次记得、一次不记得）。 |
 | 标题面 | 不推 `session_info_update`，`session/list` 条目也没有 `title` → 标题只能用**第一条 prompt 派生**（会写进映射表，所以恢复后仍是真名；没有 prompt 时是目录名）。 |
 | `promptCapabilities.image` / `embeddedContext` | 带图/带嵌入上下文的 prompt，那些块**被丢掉并记日志**，文本照常发送。 |
 | `sessionCapabilities.delete` | TUI 的删除只能删本地（映射表条目 + tab）；**agent 侧会话还在**。桥会在后台尝试一次 `session/delete`，这个 agent 甚至可能不答，超时后记 `agent could not release <id>`。 |

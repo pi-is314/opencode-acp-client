@@ -1033,14 +1033,24 @@ describe('resuming on an agent that advertises session/resume', () => {
       data: Projected[];
     };
     const notice = listed.data.find((message) => message.type === 'system');
-    expect(notice?.text).toBe(
-      'Resumed without showing history: this agent has no session/load capability',
-    );
+    // ★ It NAMES the agent. "this agent" left the reader guessing which one — and the answer is
+    // the command they typed after `--`, the only part they can act on. The label is the
+    // binding's basename plus its arguments (`dsh --profile acp`), which is what this test's
+    // agent is: `node <path>/fake-acp-agent.mjs`.
+    // The binding is the whole command as it was launched (`process.execPath` is an absolute
+    // path, so this is `<node> <…>/fake-acp-agent.mjs`) — verbatim, because that is what the
+    // reader typed and what they can rerun.
+    //
+    // `node`, not the absolute interpreter path: the map stores the command as the binding spells
+    // it (`agentBindingLabel` takes the basename), and the arguments verbatim. Asserted as the
+    // whole sentence so a change to either half fails here.
+    const expected =
+      `Resumed without showing history: this agent "node ${FAKE_AGENT}" ` +
+      'has no session/load capability';
+    expect(notice?.text).toBe(expected);
     // `description` is the field the TUI DRAWS, and an absent one is not "no text":
     // the client falls back to "Instructions updated" (measured in the real TUI).
-    expect(notice?.description).toBe(
-      'Resumed without showing history: this agent has no session/load capability',
-    );
+    expect(notice?.description).toBe(expected);
     // A notice is not conversation content: it must not be projected as a turn.
     expect(listed.data.some((message) => message.type === 'user')).toBe(false);
   });

@@ -4744,9 +4744,13 @@ export class BridgeServer {
               const remembered = this.sessionMap.titleFor(record.session.id);
               if (remembered) this.adoptStoredTitle(record, remembered);
               else record.session.title = stripTitleMarkers(record.session.title);
+              // ★ Name the agent. "this agent" made a reader guess which one — and the answer is
+              // the command they typed after `--`, which is the only thing they can act on.
               this.appendNotice(
                 record,
-                'Resumed without showing history: this agent has no session/load capability',
+                `Resumed without showing history: this agent "${agentBindingLabel(
+                  record.agent ?? this.agentBinding(),
+                )}" has no session/load capability`,
               );
             } catch (err) {
               const text = err instanceof Error ? err.message : String(err);

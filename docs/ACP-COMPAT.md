@@ -96,7 +96,7 @@ not see? Per-agent measurements (with the exact `initialize` responses) live in
 
 | Agent does not advertise | Still works | The user cannot see | Marker / wording |
 |---|---|---|---|
-| `loadSession` (it has `sessionCapabilities.resume`) | the restore **succeeds** — same session, and the agent's context may continue | the earlier conversation (ACP's `session/resume` replays nothing) | tab keeps the conversation's **real name** (no marker) **plus** a `◈ Notice` in the transcript: *Resumed without showing history: this agent has no session/load capability* |
+| `loadSession` (it has `sessionCapabilities.resume`) | the restore **succeeds** — same session, and the agent's context may continue | the earlier conversation (ACP's `session/resume` replays nothing) | tab keeps the conversation's **real name** (no marker) **plus** a `◈ Notice` in the transcript: *Resumed without showing history: this agent "<agent command>" has no session/load capability* |
 | neither `loadSession` nor `resume` | a conversation can still be created | any restore; the tab becomes a new one | tab `[new conversation] <name>` + a `◈ Notice` saying the old session could not be reopened |
 | a title surface (`session_info_update`, and no `title` in `session/list`) | the session works; the agent's own name is never used | the conversation's real name — it falls back to the first prompt's words, then to the directory basename | plain fallback title, no marker |
 | `promptCapabilities.image` / `embeddedContext` | text prompts; the turn runs | attachments and embedded context (those blocks are dropped and logged) | none — the block is gone before it is sent |

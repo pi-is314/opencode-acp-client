@@ -89,7 +89,7 @@ opencode v2 TUI 没有对应 ACP 能力的面。
 
 | agent 不宣告 | 仍然可用 | 用户看不到 | 界面上的说法 |
 |---|---|---|---|
-| `loadSession`（有 `sessionCapabilities.resume`） | **恢复成功**——同一个会话，agent 侧上下文可能继续 | 之前的对话（ACP 的 `session/resume` 不重放任何东西） | tab 保留**真名**（无标记），**并且**会话区一条 `◈ Notice`：*Resumed without showing history: this agent has no session/load capability* |
+| `loadSession`（有 `sessionCapabilities.resume`） | **恢复成功**——同一个会话，agent 侧上下文可能继续 | 之前的对话（ACP 的 `session/resume` 不重放任何东西） | tab 保留**真名**（无标记），**并且**会话区一条 `◈ Notice`：*Resumed without showing history: this agent "<agent command>" has no session/load capability* |
 | `loadSession` 和 `resume` 都没有 | 仍然可以新建对话 | 任何恢复；tab 变成一个**新对话** | tab `[new conversation] <名字>` + 一条 `◈ Notice` 说明旧会话打不开 |
 | 标题面（不推 `session_info_update`，`session/list` 也没有 `title`） | 会话照常 | 对话的真名——退回**第一条 prompt 的派生标题**，再退回目录名 | 普通兜底标题，不加标记 |
 | `promptCapabilities.image` / `embeddedContext` | 文本 prompt 照常 | 附件与嵌入上下文（那些块在发送前被丢掉并记日志） | 无提示（块已经不在了） |

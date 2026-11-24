@@ -63,7 +63,7 @@ oc-acp-client -- dsh --profile acp      # the profile name is a local example
 
 | Missing capability | What it costs you here |
 |---|---|
-| `loadSession` | **The resume works but shows no history**: `-s` takes `session/resume` (reconnect the same session, no replay), the tab **keeps the real name** (no marker), and the transcript gains a `◈ Notice`: **`Resumed without showing history: this agent has no session/load capability`**. Whether the context survived is **not guaranteed** — measured both ways on one profile (remembered once after a model switch, not the next time). |
+| `loadSession` | **The resume works but shows no history**: `-s` takes `session/resume` (reconnect the same session, no replay), the tab **keeps the real name** (no marker), and the transcript gains a `◈ Notice`: **`Resumed without showing history: this agent "<agent command>" has no session/load capability`**. Whether the context survived is **not guaranteed** — measured both ways on one profile (remembered once after a model switch, not the next time). |
 | Titles | It pushes no `session_info_update`, and its `session/list` entries carry no `title` → the title can only be **derived from the first prompt** (which is written to the map, so a resume still shows the real name; a session with no prompt gets the directory name). |
 | `promptCapabilities.image` / `embeddedContext` | Image and embedded-context blocks are **dropped and logged**; the text is still sent. |
 | `sessionCapabilities.delete` | Deleting in the TUI only removes the local side (map entry + tab); **the agent's session stays**. The bridge tries one `session/delete` in the background; this agent may not even answer, and the timeout logs `agent could not release <id>`. |
