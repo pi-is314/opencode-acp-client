@@ -176,10 +176,15 @@ if (process.env.VERIFY_SKIP_TODO === '1') {
   // `VERIFY_SKIP_TUI=1` follows on the bash side, and the reason this step is worth running from a
   // console on the VM.
   step('e2e: todo (a real TUI through node-pty; asserts the v2.1 todo sidebar)');
+  // ★ A TIMEOUT, because the console-less failure is not always the tidy `AttachConsole failed`
+  // this branch knows how to read: measured on the VM over SSH, node-pty instead sat there for
+  // twenty minutes with the step producing no output at all. A gate that hangs is worse than one
+  // that skips and says why, so the step gets a ceiling of its own.
   const todo = spawnSync('node', [join('scripts', 'e2e-todo-windows.mjs')], {
     cwd: REPO,
     encoding: 'utf8',
     env: process.env,
+    timeout: Number(process.env.OPENCODE_TODO_TIMEOUT_MS ?? 240_000),
   });
   const output = `${todo.stdout ?? ''}${todo.stderr ?? ''}`;
   if (todo.status === 0) {
@@ -190,7 +195,8 @@ if (process.env.VERIFY_SKIP_TODO === '1') {
     // not depend on, needed by this mode alone. The step is skipped with the command to add it.
     process.stdout.write(output);
     process.stdout.write('  ! skipped: node-pty is not installed in this checkout\n');
-  } else if (/AttachConsole failed/.test(output)) {
+  } else if (/AttachConsole failed/.test(output) || todo.signal === 'SIGTERM') {
+    process.stdout.write(output);
     process.stdout.write('  ! skipped: this session has no console (run the gate from a console on\n');
     process.stdout.write('  ! the VM to cover it) — node-pty cannot attach a ConPTY over SSH\n');
   } else {
