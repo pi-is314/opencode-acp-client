@@ -481,10 +481,23 @@ pnpm e2e:dsh-acp # = bash scripts/e2e-dsh-acp.sh  ★ full acceptance against a 
    person nor a company.
 5. **Brand consistency**: `--help` stays English, the README stays bilingual.
 6. **A symmetric product** (another TUI + the same bridge) is **another repo's** business, out of scope here.
-7. ★ **The transcript's default folding is the client's business, not ours.** v2.4 defaults
-   `session.verbosity` to `low` and `session.thinking` to `hide`, and a user changes both with
-   `/settings` or the same `~/.config/opencode/cli.json` a native opencode reads — the bridge
-   deliberately does NOT redirect `XDG_CONFIG_HOME` (only state and data, per agent), so one edit
-   covers both. That makes "should we default to expanded?" a question about opencode, already
-   answered by opencode, and overriding it here would be a difference a user did not ask for.
-   Decided: no bridge switch, no config injection, no README note.
+7. ★★ **A TUI behaviour that matches a native opencode is not a feature request — it is the
+   baseline.** No bridge switch, no config injection, and **no documentation** either: if a user
+   running `opencode` and a user running `oc-acp-client` see the same thing and change it the same
+   way, there is nothing for this project to add. Writing it down would claim a difference that
+   does not exist, and a knob would let the two drift apart.
+
+   ★ **Why it is achievable at all**: the bridge redirects only `XDG_STATE_HOME` and
+   `XDG_DATA_HOME` (per agent, so tabs and the db are isolated) and deliberately leaves
+   `XDG_CONFIG_HOME` alone, so `cli.json` / `tui.json` are THE SAME FILE either way — one edit
+   covers both clients. Any setting the TUI exposes (`/settings`, a slash command, a keybind) is
+   therefore already "supported" here; the check before changing anything is "does a native
+   opencode user get this for free?", and if the answer is yes, **do nothing**.
+
+   ★ Worked example, measured: v2.4 defaults `session.verbosity` to `low` and
+   `session.thinking` to `hide`; `/settings` flips both and edits the same file both clients read.
+   A report of "our tools are folded" is answered with opencode's own behaviour, not a patch.
+
+   ★ The inverse still holds: a behaviour that DIFFERS from native opencode is a defect
+   (non-negotiable #4), and one opencode has no way to express at all is a gap for
+   [docs/ACP-COMPAT.md](docs/ACP-COMPAT.md) — this rule covers only the first case.

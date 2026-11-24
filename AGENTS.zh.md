@@ -440,9 +440,19 @@ pnpm e2e:dsh-acp # = bash scripts/e2e-dsh-acp.sh  ★ 真 agent 全功能验收�
    版权行写的是**社区形式**（`Copyright 2026 opencode-acp-client contributors`），不署个人或公司。
 5. **品牌一致性**：`--help` 保持英文，README 保持双语。
 6. **对称产品**（别的 TUI + 同一个桥）是**另一个仓**的事，不在本仓范围内。
-7. ★ **聊天区的默认折叠是客户端的事，不是我们的**。v2.4 把 `session.verbosity` 默认设成 `low`、
-   `session.thinking` 设成 `hide`，用户用 `/settings` 或原生 opencode 读的同一份
-   `~/.config/opencode/cli.json` 就能改——桥**故意不改 `XDG_CONFIG_HOME`**（只按 agent 隔离 state 与
-   data），所以改一处两边生效。于是"我们要不要默认展开"这个问题本来就属于 opencode、也已经由它回答了，
-   在这里覆盖只会制造一个用户没要求的差异。
-   决定：不加桥开关、不注入配置、README 也不写这条。
+7. ★★ **和原生 opencode 一样的 TUI 行为，不是需求，是基线。** 不加桥开关、不注入配置，
+   **也不写文档**：跑 `opencode` 的人、跑 `oc-acp-client` 的人看到的东西一样、改法也一样，那这个项目
+   就没有要补的。写下来是在宣称一个并不存在的差异，加一个旋钮则会让两边慢慢走散。
+
+   ★ **为什么做得到**：桥只重定向 `XDG_STATE_HOME` 与 `XDG_DATA_HOME`（按 agent 隔离，为了 tabs 和 db），
+   **故意不动 `XDG_CONFIG_HOME`**，所以 `cli.json` / `tui.json` 两边是**同一份文件**——改一处两边生效。
+   于是 TUI 自己能设的每一项（`/settings`、斜杠命令、keybind）在这里本来就"支持"；动手前的检查只有一个：
+   **"原生 opencode 用户是不是本来就有这个？"**，答案是"有"就**什么都别做**。
+
+   ★ 实测的例子：v2.4 把 `session.verbosity` 默认设成 `low`、`session.thinking` 设成 `hide`；
+   `/settings` 两项都能翻，改的正是两边共读的那个文件。遇到"我们的工具调用被折叠了"这种反馈，
+   回复应该是 opencode 自己的行为，而不是一个补丁。
+
+   ★ 反过来依然成立：**和原生 opencode 不一致**的行为是缺陷（见非商议第 4 条）；
+   **opencode 根本无法表达**的东西是缺口，归 [docs/ACP-COMPAT.md](docs/ACP-COMPAT.md)。
+   本条只覆盖第一种情形。
