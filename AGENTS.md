@@ -481,3 +481,10 @@ pnpm e2e:dsh-acp # = bash scripts/e2e-dsh-acp.sh  ★ full acceptance against a 
    person nor a company.
 5. **Brand consistency**: `--help` stays English, the README stays bilingual.
 6. **A symmetric product** (another TUI + the same bridge) is **another repo's** business, out of scope here.
+7. ★ **The transcript's default folding is the client's business, not ours.** v2.4 defaults
+   `session.verbosity` to `low` and `session.thinking` to `hide`, and a user changes both with
+   `/settings` or the same `~/.config/opencode/cli.json` a native opencode reads — the bridge
+   deliberately does NOT redirect `XDG_CONFIG_HOME` (only state and data, per agent), so one edit
+   covers both. That makes "should we default to expanded?" a question about opencode, already
+   answered by opencode, and overriding it here would be a difference a user did not ask for.
+   Decided: no bridge switch, no config injection, no README note.

@@ -440,3 +440,9 @@ pnpm e2e:dsh-acp # = bash scripts/e2e-dsh-acp.sh  ★ 真 agent 全功能验收�
    版权行写的是**社区形式**（`Copyright 2026 opencode-acp-client contributors`），不署个人或公司。
 5. **品牌一致性**：`--help` 保持英文，README 保持双语。
 6. **对称产品**（别的 TUI + 同一个桥）是**另一个仓**的事，不在本仓范围内。
+7. ★ **聊天区的默认折叠是客户端的事，不是我们的**。v2.4 把 `session.verbosity` 默认设成 `low`、
+   `session.thinking` 设成 `hide`，用户用 `/settings` 或原生 opencode 读的同一份
+   `~/.config/opencode/cli.json` 就能改——桥**故意不改 `XDG_CONFIG_HOME`**（只按 agent 隔离 state 与
+   data），所以改一处两边生效。于是"我们要不要默认展开"这个问题本来就属于 opencode、也已经由它回答了，
+   在这里覆盖只会制造一个用户没要求的差异。
+   决定：不加桥开关、不注入配置、README 也不写这条。
