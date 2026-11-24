@@ -1415,7 +1415,7 @@ const EXTRA_GLYPHS: Record<string, string[]> = {
   // foot must not reach the full width or the letter looks like an L with a shelf.
   // Three columns: the foot reaches one past the stem, and the spare column goes back to the
   // letters either side (the pair of gaps around the `i` was what made `client` read as two words).
-  l: ['▄  ', '█  ', '█  ', '▀▀ '],
+  l: ['▄ ', '█ ', '█ ', '▀▀'],
   // `i`: two half-cells stacked as the dot, then a full cell and its base — all in ONE column, so
   // the dot reads as tall enough to be a dot and nothing drifts sideways.
   // ★ The i is one column of ink, so its cell is ONE column wide. Every cell is padded to the same
@@ -1458,15 +1458,8 @@ function drawGlyph(line: string, fg: string, shadow: string, bg: string): string
  * letter here is how the owner asked for it ("move the i two columns left"): nothing can move left
  * of column 0, so the only way is to take the gap away.
  */
-function glyphRow(text: string, row: number, tight = ''): string {
-  let out = '';
-  [...text].forEach((char, index) => {
-    const cell = EXTRA_GLYPHS[char]?.[row] ?? '    ';
-    if (index === 0) out = cell;
-    else if (tight.includes(char)) out += cell;
-    else out += ` ${cell}`;
-  });
-  return out;
+function glyphRow(text: string, row: number): string {
+  return [...text].map((char) => EXTRA_GLYPHS[char]?.[row] ?? '    ').join(' ');
 }
 
 /**
@@ -1499,7 +1492,7 @@ export function epilogueWordmark(columns: number): string[] {
       // `client` in the bright one, keeping the native dark/bright rhythm.
       `${drawGlyph(glyphRow(WORDMARK_ACP, row), WORDMARK_FG, WORDMARK_SHADOW, WORDMARK_BG)}` +
       gap +
-      `${drawGlyph(glyphRow(WORDMARK_CLIENT, row, 'i'), WORDMARK_BRIGHT, WORDMARK_SHADOW_BRIGHT, WORDMARK_BG_BRIGHT)}`,
+      `${drawGlyph(glyphRow(WORDMARK_CLIENT, row), WORDMARK_BRIGHT, WORDMARK_SHADOW_BRIGHT, WORDMARK_BG_BRIGHT)}`,
   );
 }
 
