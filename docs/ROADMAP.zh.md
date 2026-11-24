@@ -122,6 +122,10 @@ desktop 的行为如果只能人工看，就要在文档里明确写「未自动
 [Kagura-0001/lucid](https://github.com/Kagura-0001/lucid)——两者都是 logo、截图、一段短介绍
 打头，深度内容留到下面的页面。
 
+**还有 logo**：GitHub 项目页也要一个（目前没有），风格与 opencode 的相近——能在 40px 下认得出来，
+并且深浅色背景都成立。它归到这个待办里，因为 README 就是以它打头，两边必须是同一个标：仓库页面用的
+那个文件就是 README 展示的那个。
+
 **约束**：
 
 1. **中英双语**：每处改动同时落在 `README.md` 与 `README.zh.md`；`check-links.py` 负责盯着这一对。

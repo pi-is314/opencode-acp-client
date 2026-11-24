@@ -146,6 +146,11 @@ has a home in `docs/`.
 [Kagura-0001/lucid](https://github.com/Kagura-0001/lucid) — both lead with a logo, a screenshot
 and a short pitch, and leave the depth to pages below.
 
+**Also the logo**: the GitHub project page needs one too (the project has none today), in the
+same spirit as opencode's — a mark that reads at 40px and works on light and dark. It belongs with
+this rewrite because the README leads with it and the two must be the same mark: the file the
+repository page uses is the file the README shows.
+
 **Constraints**:
 
 1. **Bilingual**: every change lands in `README.md` and `README.zh.md` together; `check-links.py`
