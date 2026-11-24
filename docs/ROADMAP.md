@@ -134,3 +134,27 @@ These three are **independent of each other** and can be taken on separately as 
 items appear later, add them here rather than scattering them across documents —
 `KNOWN-ISSUES.zh.md` records **things that happened and are not fixed yet**; this page records
 **features not started**.
+
+## 4. Trim the README, and put a logo and a screenshot on it
+
+**What**: the README has grown by accretion — every verified fact, every trap and every version
+row lives on it. It should read like an introduction instead: what this is, one screenshot, one
+command line, three links (protocol, compatibility, design rules). The reference material already
+has a home in `docs/`.
+
+**Reference**: [openma-ai/Martty](https://github.com/openma-ai/Martty) and
+[Kagura-0001/lucid](https://github.com/Kagura-0001/lucid) — both lead with a logo, a screenshot
+and a short pitch, and leave the depth to pages below.
+
+**Constraints**:
+
+1. **Bilingual**: every change lands in `README.md` and `README.zh.md` together; `check-links.py`
+   is what enforces the pair.
+2. **Nothing may be lost, only moved.** Every fact removed from the README must already exist in
+   `docs/` — and it must still be reachable from the entry document (`AGENTS.md` §1 is the
+   reading order).
+3. **The screenshot has to be honest**: a real TUI with a real agent, captured the way
+   `scripts/e2e-real-tui.sh` captures panes, not a mock-up.
+4. **A new branch.** This is a rewrite of the front page and would otherwise bury unrelated work
+   in review.
+
