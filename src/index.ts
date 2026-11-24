@@ -1392,14 +1392,34 @@ const NATIVE_CODE = [
 ];
 /** The letters the native logo does not have, in the same 4-column grammar. */
 const EXTRA_GLYPHS: Record<string, string[]> = {
-  a: ['    ', '▀▀▀█', '█__█', '▀▀▀▀'],
+  // ★ The rule every letter here obeys, read off the originals (o/p/e/n/c/d):
+  //
+  //   row 0  the ascender/gap row — only a letter that reaches above the x-height uses it, and
+  //          only with `▄` (as `d` does: `   ▄`)
+  //   row 1  a FULL `█` on the letter's first column, every x-height letter starts here
+  //   row 2  the bowl / middle
+  //   row 3  the baseline (`▀▀▀▀`), or a descender (`█▀▀▀`, as `p` does)
+  //
+  // Anything drawn outside that grid sits half a cell low and a column off, which is exactly how
+  // `a` looked before this table was rewritten.
+  //
+  // `p` is opencode's own p: the descender is a full cell down the left, `█▀▀▀`.
+  p: ['    ', '█▀▀█', '█__█', '█▀▀▀'],
+  // `c`, `e`, `n`, `a` in the same grammar the originals use.
   c: ['    ', '█▀▀▀', '█___', '▀▀▀▀'],
-  p: ['    ', '█▀▀█', '█__█', '▀▀▀ '],
-  l: ['    ', '█   ', '█   ', '▀▀▀▀'],
-  i: [' ▄  ', ' █  ', ' █  ', ' ▀▀ '],
   e: ['    ', '█▀▀█', '█^^^', '▀▀▀▀'],
   n: ['    ', '█▀▀▄', '█__█', '▀~~▀'],
-  t: ['    ', '███ ', ' █  ', ' ▀▀ '],
+  a: ['    ', '█▀▀█', '█▀▀█', '▀▀▀▀'],
+  // `l`: ascender on row 0 like `d`, stem down the same column, short foot on the baseline.
+  l: ['▄   ', '█   ', '█   ', '▀▀▀▀'],
+  // `i`: the dot is the UPPER half of the gap row (`▀`) and the stem is a full cell on row 1, so
+  // the two are separated by the dot's own empty lower half — a visible break with only half a
+  // cell of space, which is what a dot needs. (`▄`, the lower half, touches the cell below and the
+  // dot merged into the stem: rendered to pixels, the letter was one unbroken bar.)
+  i: ['▀   ', '█   ', '█   ', '    '],
+  // `t`: the ascender is the upper half of the gap row, like the i's dot, and the crossbar crosses
+  // the stem on row 2 — below the ascender, never on its own row.
+  t: ['▀   ', '█   ', '█▀▀▀', '▀▀▀ '],
   ' ': ['    ', '    ', '    ', '    '],
 };
 const WORDMARK_ACP = 'acp';
