@@ -20,6 +20,8 @@
 
 import { execFile } from 'node:child_process';
 
+import { launchSpec } from './acp/client.js';
+
 /** The oldest client whose protocol this bridge implements. */
 export const MIN_MAJOR_VERSION = 2;
 
@@ -94,9 +96,15 @@ function runVersion(command: string, timeoutMs: number): Promise<string | undefi
   // bridge before it served a single request — with `OPENCODE_BIN` pointing straight at
   // `opencode.cmd`, the most natural way to configure it there. Go through `cmd.exe`, the
   // same shape `printHelp()` and `launchSpec()` use.
-  const viaCmd = process.platform === 'win32' && /\.(cmd|bat)$/i.test(command);
-  const file = viaCmd ? 'cmd.exe' : command;
-  const args = viaCmd ? ['/d', '/s', '/c', `""${command}" --version"`] : ['--version'];
+  //
+  // ★ And this must be the SAME rule `launchSpec` applies, not a second copy of part of it. It
+  // handled `.cmd`/`.bat` and treated everything else as an image, so `OPENCODE_BIN` pointing at
+  // a `.mjs` (a fake TUI in the entry e2e) died with `spawn EFTYPE` before the bridge served
+  // anything — the second place that bug had to be fixed, because the rule lived in two places.
+  const spec = launchSpec(command, ['--version']);
+  const viaCmd = spec.verbatim;
+  const file = spec.file;
+  const args = spec.args;
   return new Promise((resolve) => {
     execFile(
       file,
