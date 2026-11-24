@@ -647,7 +647,17 @@ subscribe() {
   : >"$SSE"
   curl -sN --max-time "${1:-25}" "http://127.0.0.1:$PORT/api/event" >"$SSE" 2>/dev/null &
   SSE_PID=$!
-  sleep 1
+  # ★ Wait for the HANDSHAKE, not a duration. A fixed `sleep 1` assumed the stream was attached
+  # by then; on Windows it sometimes was not, so the first events of a scenario — the ones the
+  # assertions look for — were written before the subscription existed and never appeared.
+  # `server.connected` is the hub's own first frame; once it is in the file the subscription is
+  # live and nothing that follows can be missed.
+  for _ in $(seq 1 100); do
+    grep -q 'server.connected' "$SSE" 2>/dev/null && return 0
+    sleep 0.1
+  done
+  echo "  ! the event stream never said server.connected" >&2
+  return 1
 }
 
 send_prompt() {  # $1 = session id, $2 = JSON body
