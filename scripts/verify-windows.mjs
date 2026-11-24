@@ -185,6 +185,11 @@ if (process.env.VERIFY_SKIP_TODO === '1') {
   if (todo.status === 0) {
     process.stdout.write(output);
     process.stdout.write('  ✓ todo mode passed\n');
+  } else if (todo.status === 2) {
+    // Exit 2 is the script's own "node-pty is not installed" — a native addon this project does
+    // not depend on, needed by this mode alone. The step is skipped with the command to add it.
+    process.stdout.write(output);
+    process.stdout.write('  ! skipped: node-pty is not installed in this checkout\n');
   } else if (/AttachConsole failed/.test(output)) {
     process.stdout.write('  ! skipped: this session has no console (run the gate from a console on\n');
     process.stdout.write('  ! the VM to cover it) — node-pty cannot attach a ConPTY over SSH\n');

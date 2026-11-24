@@ -54,7 +54,17 @@ if (process.platform !== 'win32') {
 // `require` follows and the ESM resolver does not: measured on the Windows VM, `require('node-pty')`
 // loaded fine while `import('node-pty')` answered `Cannot find package 'node-pty'`, which this
 // script reported as "not installed" and failed the gate's last step.
-const pty = createRequire(import.meta.url)('node-pty');
+let pty;
+try {
+  pty = createRequire(import.meta.url)('node-pty');
+} catch {
+  // Not a dependency of this project on purpose: it is a native addon needed only by THIS check,
+  // on one platform. The gate treats this as SKIPPED-with-a-reason rather than a failure, so a
+  // machine without it still runs every other step and is told exactly how to add the coverage.
+  console.error('  ! node-pty is not installed — this check is skipped');
+  console.error('  !   pnpm add -D node-pty && pnpm rebuild node-pty   (allowBuilds: node-pty: true)');
+  process.exit(2);
+}
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const work = mkdtempSync(join(tmpdir(), 'oac-todo-win-'));
