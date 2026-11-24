@@ -985,6 +985,52 @@ describe('resuming on an agent that advertises neither load nor resume', () => {
 });
 
 describe('resuming on an agent that advertises session/resume', () => {
+  // ★ A resume must announce the CATALOG, not only the model.
+  //
+  // The client asks `GET /api/model` at startup — before the resume has run — and sees only the
+  // placeholder, so the composer names `default` and `/models` is empty. `session.model.selected`
+  // does not fix that (it updates the current model and inserts a "model-switched" row, never
+  // refetching the list); `model.updated` is the event the client turns into a catalog sync.
+  //
+  // Measured on `dsh --profile acp`: the resume response carried 2 config options / 49 models
+  // while `/api/model` had answered with the single placeholder a moment earlier, and the
+  // transcript cards showed the right model next to a footer that showed `default`.
+  it('announces the model catalog after a resume, not just the current model', async () => {
+    const server = new BridgeServer({
+      command: process.execPath,
+      args: [FAKE_AGENT],
+      directory: process.cwd(),
+      port: 0,
+      env: { FAKE_ACP_MODELS: '1', FAKE_ACP_CAPS_RESUME: '1' },
+      resumeSession: 'resume-me',
+      onLog: (line) => logs.push(line),
+    });
+    servers.push(server);
+    const { host, port } = await server.listen();
+    const url = `http://${host}:${port}`;
+
+    // Subscribed BEFORE anything else, exactly as a client is: the startup fetch of the catalog
+    // is what leaves it with the placeholder.
+    const frames: string[] = [];
+    const request = (await import('node:http')).request(`${url}/api/event`, (response) => {
+      response.setEncoding('utf8');
+      response.on('data', (chunk: string) => frames.push(chunk));
+    });
+    request.end();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    await fetch(`${url}/api/session`).catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 800));
+
+    const seen = frames.join('');
+    expect(seen).toContain('"type":"model.updated"');
+    // And the catalog it points at is real once the client looks again.
+    const models = (await (await fetch(`${url}/api/model`)).json()) as {
+      data: Array<{ providerID?: string }>;
+    };
+    expect(models.data.some((model) => model.providerID !== 'acp')).toBe(true);
+  });
+
   it('resumes WITHOUT replaying history, and says so instead of "not resumed"', async () => {
     // The backend's plain ACP profile: `session/resume` keeps the agent's context
     // but carries no transcript, so the screen legitimately starts empty. The

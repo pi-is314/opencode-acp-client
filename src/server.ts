@@ -4731,6 +4731,34 @@ export class BridgeServer {
               // named the wrong one. The model genuinely in use is the session's own.
               const resumedModel = modelFromConfigOptions(agent.configOptionsFor(wanted));
               if (resumedModel) record.model = resumedModel;
+              // ★ Tell the client the CATALOG changed, not just the model.
+              //
+              // The client fetches `/api/model` at startup — before this resume has run — and
+              // sees only the placeholder, so the composer names `default` and `/models` lists
+              // nothing. `session.model.selected` does not help: it updates the current model and
+              // inserts a "model-switched" row, but never refetches the list. `model.updated` is
+              // the event the client turns into `result.location.model.sync(...)`.
+              //
+              // The `session/load` path already emitted this for the same reason; resume did not,
+              // and a resumed session therefore had a right card and a wrong footer. Measured on
+              // `dsh --profile acp`: the resume response carries 2 config options (49 models) while
+              // `/api/model` had answered with the placeholder one moment earlier.
+              const resumeDirectory = record.directory ?? this.location.directory;
+              this.hub.emit({
+                type: EVENT.modelUpdated,
+                data: {},
+                // The SESSION's own directory, exactly as the `session/load` path does: the client
+                // keys the catalog by this event's location, and a key nothing reads leaves the
+                // composer locked on the restored session.
+                location: {
+                  directory: resumeDirectory,
+                  project: {
+                    id: projectIdFor(resumeDirectory),
+                    directory: resumeDirectory,
+                    canonical: resumeDirectory,
+                  },
+                },
+              });
               this.log(
                 `[bridge] resumed '${wanted}' without replay (session/resume carries no history); whether the ` +
                   `model still has the earlier conversation is up to the agent — measured both ways on the same profile`,
