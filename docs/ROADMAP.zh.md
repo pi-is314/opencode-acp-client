@@ -36,6 +36,56 @@
 **验收方式**：与 TUI 同标准——**按屏幕**断言，不是"接口有响应"（见 AGENTS.md 铁律 8）。
 desktop 的行为如果只能人工看，就要在文档里明确写「未自动化」，而不是含糊说"可行"。
 
+### 1a. 2026-11-24 实测（macOS，OpenCode.app 2.0.32 → 2.4.1）
+
+★ **desktop 连我们的桥是能跑的。** 用 CDP 走通了完整链路：加服务器 → 打开会话 → 发消息 →
+回复渲染出来。所以上面第 3 问（"卡在健康探测"）**已经不成立**——`/api/health` + `/api/info` 够用。
+
+★ **怎么驱动它**（这就是自动化的地基）：
+
+```
+/Applications/OpenCode.app/Contents/MacOS/OpenCode --remote-debugging-port=9223
+```
+
+`--remote-debugging-port` **必须走命令行**：`environment.ts` 只在 `!app.isPackaged` 时读
+`OPENCODE_DESKTOP_REMOTE_DEBUGGING_PORT`，而发行版是打包的。CDP 目标只有一个：
+`oc://renderer/index.html`。加服务器：设置 → 服务器 → 页面右上「添加服务器」→ 菜单里的
+「添加服务器」→ 填 URL → 「添加服务器」（**密码可以留空**）。菜单项要点
+`pointerdown`+`pointerup`+`click` 三连才开，单独一个 `.click()` 没反应。
+
+★ **「本地服务器」是 desktop 自己的 opencode**，不是我们的桥：它跑
+`opencode-cli serve --service`（来自 `~/Library/Application Support/ai.opencode.desktop/cli/`），
+那些会话是原生 opencode 的数据。它起不来是**致命的**（窗口变成错误页、app 退出），
+**没有"只用外部服务器"的模式**。
+
+★ **隔离为什么还不行，说准一点。** 四个开关里有三个被 `!app.isPackaged` 挡住：
+
+| 开关 | 对打包版的效果 |
+|---|---|
+| `OPENCODE_DESKTOP_TEST_ROOT` | ✗ `createTestRoot` 打包时直接返回 undefined |
+| `OPENCODE_DESKTOP_ISOLATED_SERVER=1` | ✗ 给 `serve` 加 `--port 0` 的就是它；实测 `args=["serve","--service"]` |
+| `--user-data-dir` | ✗ 被 `app.setPath("userData", …)` 覆盖 |
+| `OPENCODE_TEST_ONBOARDING=1` | ⚠ 只有它活着，它**搬 XDG 根目录**（+`OPENCODE_DB=:memory:`），但**不动端口** |
+
+**端口就是墙。** `defaultPort()`（`packages/cli/src/services/service-config.ts`）对 channel
+`latest`（发行版 desktop 走的就是它）返回 `0xc0de` = **49374**，`local` 是 `0xc0df`，其余由
+channel 哈希出 10000..60000。所以两个 desktop 不能同时跑，隔离尝试会和用户自己的实例撞车：
+
+    Managed service port 49374 on 127.0.0.1 is already in use by another process.
+
+`opencode service set port <n>` 是官方给的出路——**但它改的是用户的全局服务注册表**，
+所以测试里**绝不能调用**（本次调查调用过一次，已改回）。
+
+⟹ **打包版 desktop 无法隔离测试。要测它，就得从源码跑**（`packages/desktop`，
+`bun run dev`）：它设 `OPENCODE_CHANNEL=local`（端口 49375）**并且**
+`OPENCODE_DESKTOP_ISOLATED_SERVER=1`（随机 `--port 0`），`isPackaged === false`，上面每个开关
+都能用。在那套 harness 出现之前，本节一直关心的「每个 agent 的标签页隔离」仍然悬着。
+
+★ **清理的坑，踩了两次**：`pkill -f "OpenCode.app/Contents/MacOS/OpenCode"` 只杀 app，
+**不杀它拉起的 `opencode-cli serve --service` 子进程**。那个孤儿占着 49374，之后每次启动
+desktop 都撞端口。任何 desktop 实验之后，
+`ps aux | grep "[o]pencode-onboarding"` 必须是空的。
+
 ---
 
 ## 2. 实现 ACP v2

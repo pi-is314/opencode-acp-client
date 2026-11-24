@@ -42,6 +42,61 @@ answered for the wrong one), so it is not an optional optimisation — it is the
 not "the endpoint answered" (AGENTS.md rule 8). If desktop's behaviour can only be judged by hand,
 the documentation must say "not automated" outright rather than hint that it works.
 
+### 1a. What was measured on 2026-11-24 (macOS, OpenCode.app 2.0.32 → 2.4.1)
+
+★ **desktop WORKS against this bridge.** Driven end to end through CDP: add server → open a session
+→ send a prompt → the reply renders. So question 3 above ("stuck on the health probe") is **no
+longer true** — `/api/health` + `/api/info` are enough.
+
+★ **How to drive it** (this is the automation base):
+
+```
+/Applications/OpenCode.app/Contents/MacOS/OpenCode --remote-debugging-port=9223
+```
+
+`--remote-debugging-port` must go on the **command line**. `environment.ts` only reads
+`OPENCODE_DESKTOP_REMOTE_DEBUGGING_PORT` when `!app.isPackaged`, and the shipped app IS packaged.
+One CDP target: `oc://renderer/index.html`. Adding a server: 设置 → 服务器 → the page's top-right
+添加服务器 → menu 添加服务器 → URL → 添加服务器 (**password may be left empty**). The menu items
+only open on `pointerdown`+`pointerup`+`click`; a bare `.click()` does nothing.
+
+★ **The local server is desktop's OWN opencode**, not the bridge: it runs
+`opencode-cli serve --service` from `~/Library/Application Support/ai.opencode.desktop/cli/`, and
+its sessions are native opencode data. A failure there is **fatal** (the window shows an error page
+and the app quits); there is no "external server only" mode.
+
+★ **Why isolation is still blocked, precisely.** Three of the four switches are gated on
+`!app.isPackaged`:
+
+| Switch | Effect on a packaged desktop |
+|---|---|
+| `OPENCODE_DESKTOP_TEST_ROOT` | ✗ `createTestRoot` returns undefined when packaged |
+| `OPENCODE_DESKTOP_ISOLATED_SERVER=1` | ✗ it is what adds `serve --port 0`; measured `args=["serve","--service"]` |
+| `--user-data-dir` | ✗ `app.setPath("userData", …)` overwrites it |
+| `OPENCODE_TEST_ONBOARDING=1` | ⚠ only this one survives, and it **moves XDG roots** (+`OPENCODE_DB=:memory:`) while leaving the PORT alone |
+
+**The port is the wall.** `defaultPort()` (`packages/cli/src/services/service-config.ts`) is
+`0xc0de` = **49374** for channel `latest` (what a release desktop runs), `0xc0df` for `local`, and a
+hash-derived 10000..60000 otherwise. Two desktops therefore cannot run at once, and an isolation
+attempt collides with the user's own instance:
+
+    Managed service port 49374 on 127.0.0.1 is already in use by another process.
+
+`opencode service set port <n>` is the documented escape — **but it edits the USER's global service
+registry**, so a test must never call it (it was called once during this investigation and had to be
+reverted).
+
+⟹ **A packaged desktop cannot be tested in isolation. Testing it means running desktop from source**
+(`packages/desktop`, `bun run dev`), which sets `OPENCODE_CHANNEL=local` (port 49375) **and**
+`OPENCODE_DESKTOP_ISOLATED_SERVER=1` (random `--port 0`) with `isPackaged === false` — every switch
+above then works. Until that harness exists, the per-agent tab isolation question (the one this
+section has always been about) stays open.
+
+★ **Cleanup trap, learned twice**: `pkill -f "OpenCode.app/Contents/MacOS/OpenCode"` kills the app
+but **not the `opencode-cli serve --service` child it spawned**. That orphan holds 49374 and every
+later desktop launch dies with the port error. After any desktop experiment:
+`ps aux | grep "[o]pencode-onboarding"` must be empty.
+
 ---
 
 ## 2. Implement ACP v2
