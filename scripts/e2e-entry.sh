@@ -149,7 +149,16 @@ kill -TERM "$BRIDGE_PID"
 EXIT_CODE=0
 wait "$BRIDGE_PID" || EXIT_CODE=$?
 BRIDGE_PID=""
-[ "$EXIT_CODE" = "0" ] && ok "bridge exited 0 on SIGTERM" || fail "bridge exited $EXIT_CODE on SIGTERM"
+# ★ On Windows a shell `kill -TERM` does not deliver a POSIX signal: MSYS/Git-Bash maps it onto
+# TerminateProcess and `wait` reports 143 (128+15) instead of the 0 the bridge exits with after
+# tidying up. The contract that matters is "it stopped and left nothing behind", so the exit code
+# is asserted where signal semantics exist and the cleanup is asserted everywhere.
+if [ "${OS:-}" = "Windows_NT" ]; then
+  ok "bridge stopped on TERM (exit $EXIT_CODE; Windows has no signal exit codes)"
+else
+  [ "$EXIT_CODE" = "0" ] && ok "bridge exited 0 on SIGTERM" || fail "bridge exited $EXIT_CODE on SIGTERM"
+fi
+
 no_leftovers 'fake-opencode-tui\.mjs' "$TUI_BEFORE" leftovers || true
 
 # ---------------------------------------------------------------------------
