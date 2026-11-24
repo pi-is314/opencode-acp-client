@@ -40,9 +40,12 @@ NATIVE_CODE = [
 # The colours the terminal actually paints, sampled from a real run (a 256-colour terminal maps
 # the escape codes onto these). Kept as literals so the image does not depend on a theme.
 DARK_STROKE = (0, 43, 54)        # `open`: the dark teal of WORDMARK_FG on this theme
-DARK_INNER = (38, 38, 38)        # its interior cell
+DARK_INNER = (150, 160, 163)     # its interior cell — light, so it reads as a shadow
+                                  # rather than a hole (38,38,38 was near-black)
 BRIGHT_STROKE = (163, 185, 188)  # `code`: the light grey of WORDMARK_BRIGHT
-BRIGHT_INNER = (68, 68, 68)      # its interior cell
+BRIGHT_INNER = (140, 152, 156)   # its interior cell — deeper than the O's, because the C's
+                                  # stroke is light and the interior has to read as a shadow
+                                  # rather than as more of the same letter
 
 OUT = Path(__file__).resolve().parent.parent  # the repo root: GitHub reads logo.png from here
 
