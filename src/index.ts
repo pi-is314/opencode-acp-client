@@ -1392,14 +1392,39 @@ const NATIVE_CODE = [
 ];
 /** The letters the native logo does not have, in the same 4-column grammar. */
 const EXTRA_GLYPHS: Record<string, string[]> = {
-  a: ['    ', '▀▀▀█', '█__█', '▀▀▀▀'],
+  // ★ The rule every letter here obeys, read off the originals (o/p/e/n/c/d):
+  //
+  //   row 0  the ascender/gap row — only a letter that reaches above the x-height uses it, and
+  //          only with `▄` (as `d` does: `   ▄`)
+  //   row 1  a FULL `█` on the letter's first column, every x-height letter starts here
+  //   row 2  the bowl / middle
+  //   row 3  the baseline (`▀▀▀▀`), or a descender (`█▀▀▀`, as `p` does)
+  //
+  // Anything drawn outside that grid sits half a cell low and a column off, which is exactly how
+  // `a` looked before this table was rewritten.
+  //
+  // `p` is opencode's own p: the descender is a full cell down the left, `█▀▀▀`.
+  p: ['    ', '█▀▀█', '█__█', '█▀▀▀'],
+  // `c`, `e`, `n`, `a` in the same grammar the originals use.
   c: ['    ', '█▀▀▀', '█___', '▀▀▀▀'],
-  p: ['    ', '█▀▀█', '█__█', '▀▀▀ '],
-  l: ['    ', '█   ', '█   ', '▀▀▀▀'],
-  i: [' ▄  ', ' █  ', ' █  ', ' ▀▀ '],
   e: ['    ', '█▀▀█', '█^^^', '▀▀▀▀'],
   n: ['    ', '█▀▀▄', '█__█', '▀~~▀'],
-  t: ['    ', '███ ', ' █  ', ' ▀▀ '],
+  // The owner's own specification for these three, given as row-by-row text.
+  a: ['    ', '▀▀▀█', '█__█', '▀▀▀▀'],
+  // `l`: ascender on the gap row (as `d` has it), stem down the same column, SHORT foot — the
+  // foot must not reach the full width or the letter looks like an L with a shelf.
+  // Three columns: the foot reaches one past the stem, and the spare column goes back to the
+  // letters either side (the pair of gaps around the `i` was what made `client` read as two words).
+  l: ['▄  ', '█  ', '█  ', '▀▀ '],
+  // `i`: two half-cells stacked as the dot, then a full cell and its base — all in ONE column, so
+  // the dot reads as tall enough to be a dot and nothing drifts sideways.
+  // ★ The i is one column of ink, so its cell is ONE column wide. Every cell is padded to the same
+  // width by `glyphRow`, so anything wider is a hole on both sides of the letter — two columns
+  // still left the pair of gaps the eye reads as a broken word.
+  i: ['▄', '▄', '█', '▀'],
+  // `t`: the crossbar `▀█▀` sits on row 1 and the ascender (row 0) and stem (row 2) both take its
+  // MIDDLE column; the foot starts under the stem and reaches one column further right.
+  t: [' ▄  ', '▀█▀ ', ' █  ', ' ▀▀ '],
   ' ': ['    ', '    ', '    ', '    '],
 };
 const WORDMARK_ACP = 'acp';
@@ -1425,8 +1450,23 @@ function drawGlyph(line: string, fg: string, shadow: string, bg: string): string
     .join('');
 }
 
-function glyphRow(text: string, row: number): string {
-  return [...text].map((char) => EXTRA_GLYPHS[char]?.[row] ?? '    ').join(' ');
+/**
+ * One row of a word, one cell per character plus the separator between them.
+ *
+ * `tight` names the characters that get NO separator on their left — the `i` is a single column
+ * of ink, so the space the others need on both sides reads as two holes around it. Listing the
+ * letter here is how the owner asked for it ("move the i two columns left"): nothing can move left
+ * of column 0, so the only way is to take the gap away.
+ */
+function glyphRow(text: string, row: number, tight = ''): string {
+  let out = '';
+  [...text].forEach((char, index) => {
+    const cell = EXTRA_GLYPHS[char]?.[row] ?? '    ';
+    if (index === 0) out = cell;
+    else if (tight.includes(char)) out += cell;
+    else out += ` ${cell}`;
+  });
+  return out;
 }
 
 /**
@@ -1459,7 +1499,7 @@ export function epilogueWordmark(columns: number): string[] {
       // `client` in the bright one, keeping the native dark/bright rhythm.
       `${drawGlyph(glyphRow(WORDMARK_ACP, row), WORDMARK_FG, WORDMARK_SHADOW, WORDMARK_BG)}` +
       gap +
-      `${drawGlyph(glyphRow(WORDMARK_CLIENT, row), WORDMARK_BRIGHT, WORDMARK_SHADOW_BRIGHT, WORDMARK_BG_BRIGHT)}`,
+      `${drawGlyph(glyphRow(WORDMARK_CLIENT, row, 'i'), WORDMARK_BRIGHT, WORDMARK_SHADOW_BRIGHT, WORDMARK_BG_BRIGHT)}`,
   );
 }
 
