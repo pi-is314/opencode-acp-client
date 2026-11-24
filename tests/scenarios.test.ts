@@ -1037,15 +1037,17 @@ describe('resuming on an agent that advertises session/resume', () => {
     // the command they typed after `--`, the only part they can act on. The label is the
     // binding's basename plus its arguments (`dsh --profile acp`), which is what this test's
     // agent is: `node <path>/fake-acp-agent.mjs`.
-    // The binding is the whole command as it was launched (`process.execPath` is an absolute
-    // path, so this is `<node> <…>/fake-acp-agent.mjs`) — verbatim, because that is what the
-    // reader typed and what they can rerun.
+    // The binding is the whole command as it was launched — `agentBindingLabel` takes the
+    // command's BASENAME and the arguments verbatim, and the notice prints that.
     //
-    // `node`, not the absolute interpreter path: the map stores the command as the binding spells
-    // it (`agentBindingLabel` takes the basename), and the arguments verbatim. Asserted as the
-    // whole sentence so a change to either half fails here.
+    // ★ Derived, not hard-coded. This suite starts the bridge with `process.execPath`, whose
+    // basename is `node` on macOS/Linux and `node.exe` on Windows — and a literal `"node …"`
+    // passed here for exactly as long as CI happened to run on Linux. The assertion is the whole
+    // sentence, built from the same rule the bridge applies, so a change to either half still
+    // fails here.
+    const launched = basename(process.execPath);
     const expected =
-      `Resumed without showing history: this agent "node ${FAKE_AGENT}" ` +
+      `Resumed without showing history: this agent "${launched} ${FAKE_AGENT}" ` +
       'has no session/load capability';
     expect(notice?.text).toBe(expected);
     // `description` is the field the TUI DRAWS, and an absent one is not "no text":
