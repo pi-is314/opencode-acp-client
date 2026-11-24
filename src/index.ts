@@ -46,6 +46,7 @@ import {
   renderSessions,
   type SessionListOptions,
 } from './sessions-command.js';
+import { launchSpec } from './acp/client.js';
 import { BridgeServer } from './server.js';
 import {
   ENV_BIN,
@@ -1151,8 +1152,14 @@ function launchClient(
     command: args.agentCommand ?? binary.path,
     args: args.agentArgs,
   });
-  const child = spawn(binary.path, argv, {
+  // ★ The same launch rule the agent gets, because `OPENCODE_BIN` may name a SCRIPT — a fake TUI
+  // in a test, a wrapper in someone's checkout. Spawning that path directly dies with
+  // `spawn EFTYPE` on Windows, where a script is not an executable; the entry e2e caught it and
+  // the TUI's exit code never reached the bridge.
+  const launch = launchSpec(binary.path, argv);
+  const child = spawn(launch.file, launch.args, {
     stdio: 'inherit',
+    ...(launch.verbatim ? { windowsVerbatimArguments: true } : {}),
     ...(isolated ? { env: { ...process.env, ...isolated } } : {}),
   });
   // Attached here rather than at the call site: `spawn` reports a failure on a

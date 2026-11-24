@@ -124,8 +124,11 @@ describe('launching an agent on Windows', () => {
   });
 
   it('leaves a real executable alone', () => {
-    const spec = launchSpec('/usr/bin/opencode', ['--version']);
-    expect(spec.file).toBe('/usr/bin/opencode');
+    // A path with an extension that is not a known script (a real image) is spawned as given —
+    // on Windows too, where `.exe` is one of those extensions.
+    const binary = process.platform === 'win32' ? 'C:\\tools\\opencode.exe' : '/usr/bin/opencode';
+    const spec = launchSpec(binary, ['--version']);
+    expect(spec.file).toBe(binary);
     expect(spec.args).toEqual(['--version']);
     expect(spec.verbatim).toBe(false);
   });
