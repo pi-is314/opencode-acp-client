@@ -219,6 +219,16 @@ export class SessionMap {
     return typeof directory === 'string' && directory.length > 0 ? directory : undefined;
   }
 
+  /** Recorded timestamps for a remembered session, if known. */
+  timesFor(visibleId: string): { createdAt?: number; updatedAt: number } | undefined {
+    const entry = this.load()[visibleId];
+    if (!entry) return undefined;
+    return {
+      ...(entry.createdAt !== undefined ? { createdAt: entry.createdAt } : {}),
+      updatedAt: entry.updatedAt,
+    };
+  }
+
   /**
    * Remember a visible id → agent id pair.
    *

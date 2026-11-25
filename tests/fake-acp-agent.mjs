@@ -1013,6 +1013,7 @@ async function onMessage(msg) {
           sessionId: 'listed-agent-session-1',
           cwd: msg.params?.cwd ?? process.cwd(),
           title: process.env.FAKE_ACP_LIST_TITLE ?? 'Imported old conversation',
+          ...(process.env.FAKE_ACP_LIST_UPDATED_AT ? { updatedAt: process.env.FAKE_ACP_LIST_UPDATED_AT } : {}),
         }],
         nextCursor: null,
       })
