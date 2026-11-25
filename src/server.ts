@@ -1446,7 +1446,8 @@ export class BridgeServer {
           }
         : this.location;
       const rememberedTitle = this.sessionMap.titleFor(sessionId);
-      record = this.state.createSession(location, rememberedTitle ?? sessionId, sessionId);
+      const rememberedTime = resolveSessionTime(undefined, this.sessionMap.timesFor(sessionId));
+      record = this.state.createSession(location, rememberedTitle ?? sessionId, sessionId, rememberedTime);
       if (rememberedTitle) this.adoptStoredTitle(record, rememberedTitle);
       if (sessionDirectory) {
         record.directory = sessionDirectory;
@@ -3020,7 +3021,12 @@ export class BridgeServer {
           // agent's own, so adopting either means adopting both.
           const visibleId = this.sessionMap.visibleIdFor(session.sessionId, directory);
           if (!visibleId) continue;
-          const record = this.state.createSession(location, title, visibleId);
+          const time = resolveSessionTime(session.updatedAt, this.sessionMap.timesFor(visibleId));
+          const record = this.state.createSession(location, title, visibleId, time);
+          if (record.messages.length === 0 && !record.history && time?.updated !== undefined) {
+            record.session.time.updated = time.updated;
+            record.session.time.created = time.created ?? time.updated;
+          }
           record.directory = directory;
           record.acpSessionId = session.sessionId;
           record.session.acpSessionId = session.sessionId;
@@ -3075,10 +3081,14 @@ export class BridgeServer {
     // record by the agent's UUID once made the TUI's `--session ses_…` miss it,
     // adopt, and double-load the backend session — which a one-writer-per-session
     // backend then refused, leaving an empty "resumed" conversation.
+    const resumeId = this.options.resumeVisibleSessionId ?? this.options.resumeSession;
+    const rememberedTime =
+      resumeId !== undefined ? resolveSessionTime(undefined, this.sessionMap.timesFor(resumeId)) : undefined;
     const record = this.state.createSession(
       this.location,
       name,
-      this.options.resumeVisibleSessionId ?? this.options.resumeSession,
+      resumeId,
+      rememberedTime,
     );
     // Decision (owner, 2026-10-14): a session belongs to the workspace the client named,
     // and only then. `cwd` is a required `session/new` field in ACP, so per-session
@@ -5369,6 +5379,31 @@ function delay(ms: number): Promise<void> {
  * Returns undefined unless both halves are present: a session model the client
  * cannot match makes it show "model (unavailable)".
  */
+/** Parse an ISO 8601 timestamp from ACP (`SessionInfo.updatedAt`) into epoch ms. */
+function parseAcpTimestamp(value: unknown): number | undefined {
+  if (typeof value !== 'string' || value.trim().length === 0) return undefined;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) && ms > 0 ? ms : undefined;
+}
+
+/**
+ * Derive session `{ created, updated }` timestamps from ACP `updatedAt` and/or `SessionMap`.
+ * Returns `undefined` when neither source holds a valid timestamp so new sessions default to `now`.
+ */
+function resolveSessionTime(
+  acpUpdatedAt: unknown,
+  remembered?: { createdAt?: number; updatedAt: number },
+): { created?: number; updated?: number } | undefined {
+  const fromAcp = parseAcpTimestamp(acpUpdatedAt);
+  const fromMapUpdated = remembered && remembered.updatedAt > 0 ? remembered.updatedAt : undefined;
+  const fromMapCreated =
+    remembered?.createdAt !== undefined && remembered.createdAt > 0 ? remembered.createdAt : undefined;
+  const updated = fromAcp ?? fromMapUpdated ?? fromMapCreated;
+  if (updated === undefined) return undefined;
+  const created = fromMapCreated !== undefined && fromMapCreated <= updated ? fromMapCreated : updated;
+  return { created, updated };
+}
+
 /**
  * Apply `GET /api/session`'s query to the sessions we hold.
  *

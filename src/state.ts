@@ -134,15 +134,22 @@ export class BridgeState {
    * session it thinks it made, misses, and follows with
    * `GET /api/session/undefined`.
    */
-  createSession(location: Location, title?: string, requestedId?: string): SessionRecord {
+  createSession(
+    location: Location,
+    title?: string,
+    requestedId?: string,
+    time?: { created?: number; updated?: number },
+  ): SessionRecord {
     const existing = requestedId ? this.sessions.get(requestedId) : undefined;
     if (existing) return existing;
     const id = requestedId ?? this.newId('ses');
     const now = Date.now();
+    const updated = time?.updated ?? now;
+    const created = time?.created ?? updated;
     const session: Session = {
       id,
       directory: location.directory,
-      time: { created: now, updated: now },
+      time: { created, updated },
       // The client reads session.location.directory directly; see SessionInfo.
       location: { directory: location.directory, workspaceID: location.workspaceID },
       projectID: location.project.id,
@@ -205,7 +212,9 @@ export class BridgeState {
   addMessage(record: SessionRecord, message: Message): void {
     record.messages.push(message);
     if (!record.parts.has(message.id)) record.parts.set(message.id, []);
-    record.session.time.updated = Date.now();
+    // A bridge-emitted notice is not conversation content and must not
+    // re-stamp a restored session's `time.updated` to now.
+    if (!message.notice) record.session.time.updated = Date.now();
   }
 
   getMessage(record: SessionRecord, messageId: string): Message | undefined {
