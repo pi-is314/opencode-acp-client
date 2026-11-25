@@ -355,7 +355,13 @@ export class BridgeServer {
    * `options`.
    */
   private get projectId(): string {
-    return `proj_${createHash('sha1').update(this.options.directory).digest('hex').slice(0, 12)}`;
+    // ★ `projectIdFor`, not a hash of the raw string. The raw hash and `projectIdFor` disagreed for
+    // the SAME workspace whenever the two spellings of a path differ — on macOS `/var/...` is
+    // `/private/var/...`, so this getter produced `proj_d94b…` while `/api/project` answered
+    // `proj_f4e4…` for the identical directory. A client that takes `location.project.id` and
+    // looks for that project in `/api/project` finds nothing, and then never asks for sessions:
+    // measured on opencode desktop, whose sidebar stayed empty while the bridge served fine.
+    return projectIdFor(this.options.directory);
   }
 
   /**
@@ -1313,7 +1319,23 @@ export class BridgeServer {
       return;
     }
     if (path === '/api/project') {
-      json([]);
+      // ★ The client builds its sidebar from THIS list and only then asks for sessions. Answering
+      // `[]` while `/api/session` happily returns sessions meant a client that trusts this route
+      // showed no project, never sent `GET /api/session`, and therefore listed no conversation —
+      // measured on opencode desktop, which asked for `/api/project`, `/api/location` and
+      // `/api/vcs` and then stopped. Derive the list from the sessions we actually hold (plus the
+      // launch directory), deduplicated by directory, in the same shape `location.project` uses.
+      const directories = new Set<string>([this.options.directory]);
+      for (const record of this.state.all()) {
+        if (record.directory) directories.add(record.directory);
+      }
+      json(
+        [...directories].sort().map((directory) => ({
+          id: projectIdFor(directory),
+          directory,
+          canonical: directory,
+        })),
+      );
       return;
     }
     if (path === '/api/worktree') {

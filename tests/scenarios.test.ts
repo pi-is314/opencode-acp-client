@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 
-import { BridgeServer, derivedTitle, markTitle, projectIdFor } from '../src/server.js';
+import { BridgeServer, canonicalPath, derivedTitle, markTitle, projectIdFor } from '../src/server.js';
 import { resolveSessionId } from '../src/index.js';
 
 const FAKE_AGENT = fileURLToPath(new URL('./fake-acp-agent.mjs', import.meta.url));
@@ -4894,5 +4894,46 @@ describe('post-load session metadata updates', () => {
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
       deferredRemovals.push(dir);
     }
+  });
+});
+
+describe('the project surfaces a client builds its sidebar from', () => {
+  // ★ Two defects, one symptom: a client asks `/api/location` and `/api/project`, builds a sidebar
+  // from them, and only then asks for sessions. Either one answering with nothing — or with an id
+  // the other does not agree on — leaves the app with no project and NO conversation at all,
+  // which looks exactly like a broken bridge. Measured on opencode desktop.
+  it('lists real projects, and the location names the same one', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oac-project-route-'));
+    servers.push(
+      Object.assign(
+        new BridgeServer({
+          command: process.execPath,
+          args: [FAKE_AGENT],
+          directory: dir,
+          port: 0,
+          env: { FAKE_ACP_MODELS: '1' },
+          onLog: () => undefined,
+        }),
+        {},
+      ),
+    );
+    const server = servers[servers.length - 1]!;
+    const { host, port } = await server.listen();
+    const url = `http://${host}:${port}`;
+
+    // An empty list was the old answer; it is what made a client stop before asking for sessions.
+    const projects = ((await (await fetch(`${url}/api/project`)).json()) as Array<Record<string, unknown>>);
+    expect(Array.isArray(projects)).toBe(true);
+    expect(projects.length).toBeGreaterThan(0);
+    expect(typeof projects[0]!['id']).toBe('string');
+
+    const location = (await (await fetch(`${url}/api/location`)).json()) as {
+      project?: { id?: string; directory?: string };
+    };
+    // ★ The two must agree. `/var/...` and `/private/var/...` hash differently, and the location
+    // used to hash the raw launch string while this route hashed the realpath: same workspace,
+    // two ids, and a client looking up the location's id found no project.
+    expect(location.project?.id).toBe(projects[0]!['id']);
+    expect(canonicalPath(String(location.project?.directory))).toBe(canonicalPath(dir));
   });
 });
