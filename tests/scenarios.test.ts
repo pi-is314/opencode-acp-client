@@ -14,7 +14,7 @@ import { removeDirSync } from './remove-dir.js';
 import { basename, dirname} from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 
 import { BridgeServer, derivedTitle, markTitle, projectIdFor } from '../src/server.js';
@@ -457,7 +457,7 @@ describe('fs/find and image attachments from the TUI', () => {
   it('forwards a non-image file:// attachment as an ACP resource_link block', async () => {
     const url = await start('rich-turn', { FAKE_ACP_ECHO_PROMPT: '1' });
     const session = await createSession(url);
-    const fileUri = `file://${join(process.cwd(), 'package.json')}`;
+    const fileUri = pathToFileURL(join(process.cwd(), 'package.json')).href;
     const response = await fetch(`${url}/api/session/${session}/prompt`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -485,8 +485,9 @@ describe('fs/find and image attachments from the TUI', () => {
   it('forwards directory file:// URIs (even with trailing slash) and preserves mimeType on resource_link', async () => {
     const url = await start('rich-turn', { FAKE_ACP_ECHO_PROMPT: '1' });
     const session = await createSession(url);
-    const dirUri = `file://${join(process.cwd(), 'src')}/`;
-    const fileUri = `file://${join(process.cwd(), 'package.json')}`;
+    const dirUri = `${pathToFileURL(join(process.cwd(), 'src')).href}/`;
+    const fileUri = pathToFileURL(join(process.cwd(), 'package.json')).href;
+    const winDirUri = 'file://D:\\a\\repo\\src\\';
     const response = await fetch(`${url}/api/session/${session}/prompt`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -495,6 +496,7 @@ describe('fs/find and image attachments from the TUI', () => {
         files: [
           { uri: dirUri },
           { uri: fileUri, mime: 'application/json', name: 'package.json' },
+          { uri: winDirUri },
         ],
       }),
     });
@@ -517,6 +519,11 @@ describe('fs/find and image attachments from the TUI', () => {
       uri: fileUri,
       name: 'package.json',
       mimeType: 'application/json',
+    });
+    expect(echoed).toContainEqual({
+      type: 'resource_link',
+      uri: winDirUri,
+      name: 'src',
     });
   });
 });
