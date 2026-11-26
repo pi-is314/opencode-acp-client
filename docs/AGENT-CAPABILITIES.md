@@ -185,6 +185,34 @@ bundle fragment that walks `customAliases` to collect valid model NAMES, which i
 The alias does apply under ACP; the failures were a missing file on Linux/Windows and a stale
 gateway on macOS.
 
+#### The "20% flaky" report was two mistakes in our own test, not the agent
+
+For a while gemini cells failed roughly one run in four — the same rate on all three platforms,
+with the same TUI build sometimes passing and sometimes not. It looked like a startup race, then
+like a gateway that dropped `topK`. Both readings were wrong.
+
+What the ACP frames actually showed: gemini-cli **begins a turn by calling an internal
+bookkeeping tool** (`update_tactical_intent`, `update_topic`) and, some of the time, ends the
+turn there **without ever emitting `agent_message_chunk`**. The turn ran; the tool executed; the
+row completed with `time.completed` set and a `tool` part and no text.
+
+Two things in `scripts/e2e-matrix-real.mjs` then turned that into a red cell:
+
+1. **The prompt was ambiguous.** `"In one short sentence: what is a protocol?"` was read as an
+   instruction about the session itself about a quarter of the time — the model called
+   `update_topic` with the question as the topic. Now it asks for a token to be echoed.
+2. **The grading counted text as the only output.** An empty `text` was graded `FAIL` even when
+   a tool had run. `rows()` carries a `tools` count now: turn 1 passes on text **or** a tool
+   call, and turns 2/3 — which exist to prove recall — report `UNKNOWN` rather than `FAIL` when
+   the model said nothing.
+
+Measured after both changes: **10 runs, 9 PASS / 1 UNKNOWN / 0 FAIL** (was 6 PASS / 2 FAIL).
+
+★ The lesson generalises: a cell that fails intermittently *and* passes after unrelated changes
+is a signal about **the test**, not the agent. Read the ACP frames before blaming the transport —
+`tool_call` frames on the wire said exactly what happened, and the failure log (HTTP polling
+only) said nothing.
+
 ★ Also needed on every platform: `NO_PROXY` for the gateway's host, `GOOGLE_GEMINI_BASE_URL`
 pointing at `<gateway>/antigravity`, a 36-character `GEMINI_API_KEY`, and — for headless runs —
 `GEMINI_CLI_TRUST_WORKSPACE=true`, without which the agent refuses an untrusted directory.

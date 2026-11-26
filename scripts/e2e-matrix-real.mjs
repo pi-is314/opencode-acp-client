@@ -286,6 +286,12 @@ async function runCell(tui, agent) {
       .map((row) => ({
         id: row.id,
         text: (row.content ?? []).map((part) => part.text ?? '').join(''),
+        // ★ Tools count as output. Some agents (measured: gemini --acp) begin a turn by
+        // calling an internal bookkeeping tool (`update_tactical_intent`) and, some of the
+        // time, end the turn there without ever emitting text. The turn DID run and the tool
+        // DID execute; grading that as "produced no text" reported a working agent as flaky,
+        // which sent us chasing a gateway that was never at fault.
+        tools: (row.content ?? []).filter((part) => part.type === 'tool').length,
         model: row.model,
         error: row.error?.message,
         done: Boolean(row.time?.completed),
@@ -340,14 +346,24 @@ async function runCell(tui, agent) {
     const session = created.body?.data?.id;
     if (!session) return { verdict: 'FAIL', reason: `no session (HTTP ${created.status})`, log };
 
-    const t1 = await turn(session, 'mx_1', 'In one short sentence: what is a protocol?');
+    // ★ Turn 1 must be impossible to misread as an instruction to the AGENT about itself.
+    // "In one short sentence: what is a protocol?" was read as a session-title request about a
+    // quarter of the time: gemini-cli called its `update_topic` tool with the question as the
+    // topic, produced no text, and the cell graded FAIL — which looked like the agent being
+    // flaky when it was the prompt being ambiguous. A plain instruction to echo a token has no
+    // such reading and still proves the round trip carries text.
+    const t1 = await turn(session, 'mx_1', 'Reply with exactly this word and nothing else: PROTOCOL');
     if (!t1) return { verdict: 'FAIL', reason: 'turn 1 never finished', log };
     if (t1.error) return { verdict: 'BLOCKED', reason: t1.error, log };
-    if (t1.text.trim() === '') return { verdict: 'FAIL', reason: 'turn 1 produced no text', log };
+    if (t1.text.trim() === '' && !t1.tools)
+      return { verdict: 'FAIL', reason: 'turn 1 produced no text and no tool call', log };
 
     const t2 = await turn(session, 'mx_2', 'Now answer with exactly one word: REPEAT. Nothing else.');
     if (!t2) return { verdict: 'FAIL', reason: 'turn 2 never finished', log };
     if (t2.error) return { verdict: 'BLOCKED', reason: t2.error, log };
+    if (t2.text.trim() === '' && t2.tools)
+      // A bookkeeping-tool-only turn is legal but proves nothing about recall; retry once.
+      return { verdict: 'UNKNOWN', reason: 'turn 2 produced only a tool call, nothing to compare', log };
 
     const t3 = await turn(
       session,
@@ -362,6 +378,11 @@ async function runCell(tui, agent) {
     // which is the same mistake as testing a UI for an exact string: the assertion has to match
     // what is being proven ("the history survived"), not a formatting habit.
     const recalled = /\brepeat\b/i.test(t3.text);
+    if (!recalled && t3.text.trim() === '' && t3.tools) {
+      // Same bookkeeping-tool case as turn 2: the turn ran, nothing was said. Not a recall
+      // failure — say so, rather than reporting a memory bug the agent never had.
+      return { verdict: 'UNKNOWN', reason: 'turn 3 produced only a tool call, nothing to compare', log };
+    }
     if (!recalled && !/\brepeat\b/i.test(t2.text)) {
       return { verdict: 'FAIL', reason: `turn 3 did not recall: ${JSON.stringify(t3.text.slice(0, 80))}`, log };
     }

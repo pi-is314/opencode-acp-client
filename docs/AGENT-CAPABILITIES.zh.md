@@ -174,6 +174,30 @@ Linux 上它同样需要 `~/.gemini/antigravity-cli/settings.json`（`modelProvi
 它是从 bundle 里一段“遍历 `customAliases` 收集合法模型**名字**”的代码推断出来的，那是另一个用途。
 alias 在 ACP 下**确实生效**；之前的失败是 Linux/Windows 缺文件、macOS 那边是别的原因。
 
+#### “约 20% 不稳定”是我们自己测试的两个错误，不是这个 agent
+
+有一段时间 gemini 的细胞大约每四次失败一次 —— 三个平台都是同样的比例，同一个 TUI 构建
+有时过、有时不过。看起来像启动竞态，后来又像是网关把 `topK` 丢了。**两个判断都错了。**
+
+ACP 帧显示的真实情况是：gemini-cli **每轮开头会先调一个内部记账工具**
+（`update_tactical_intent`、`update_topic`），而**有些时候它调完就结束这一轮，从没发过
+`agent_message_chunk`**。这一轮跑了，工具执行了，行完成了（`time.completed` 有值、
+有一个 `tool` part、但没有文本）。
+
+然后 `scripts/e2e-matrix-real.mjs` 里的两件事把它变成了红色格子：
+
+1. **提示有歧义。** `"In one short sentence: what is a protocol?"` 大约四分之一的概率被读成
+   一条关于会话本身的指令 —— 模型拿这个问题去调了 `update_topic`。现在改成让它复述一个词。
+2. **判据只把文本算作输出。** `text` 为空就判 `FAIL`，哪怕工具真的跑过。现在 `rows()` 带上了
+   `tools` 计数：第 1 轮**有文本或有工具调用**都算过；第 2/3 轮的存在意义是证明记忆，模型
+   什么都没说时报 `UNKNOWN` 而不是 `FAIL`。
+
+两处都改完后实测：**10 次，9 PASS / 1 UNKNOWN / 0 FAIL**（改前 6 PASS / 2 FAIL）。
+
+★ 这条经验可以推广：一个细胞**时好时坏**、而且**改了不相干的东西就好了**，那大概率是
+**测试**的问题，不是 agent 的。先读 ACP 帧再怀疑链路 —— 线上的 `tool_call` 帧把发生的事
+说得清清楚楚，而那份失败日志（只有 HTTP 轮询记录）什么都没说。
+
 ★ 每个平台还需要：给网关主机配 `NO_PROXY`、`GOOGLE_GEMINI_BASE_URL` 指向
 `<gateway>/antigravity`、36 位的 `GEMINI_API_KEY`，以及无头运行时加
 `GEMINI_CLI_TRUST_WORKSPACE=true` —— 否则 agent 会拒绝一个不受信任的目录。
