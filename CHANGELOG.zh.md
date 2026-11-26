@@ -7,6 +7,21 @@
 
 ---
 
+## 未发布
+
+### 修复
+
+- **恢复的会话不再一直转圈。** `session/load` 之后到达的 `usage_update`、`session_info_update`
+  原来被当成对话输出，开启了一个永远不会关闭的 turn。现在只有真正的 agent 输出才会开启
+  （PR #3，作者 [@poppyer9](https://github.com/poppyer9)）。
+- **模型列表在真正就绪时才播报。** `session/load` 还在进行时，`/api/model` 可能仍回
+  `acp/default` 占位；现在每一条能产生 catalog 的路径之后都会播报一次。
+- **`/api/command` 不再重放目录里每一个记着的会话**来发现 agent 的斜杠命令 —— 只启动一个。
+- **重放的历史保留工具结果**：失败与被取消的历史调用渲染成错误，重放的思考带上了时间，
+  不再转圈。
+
+---
+
 ## v0.2.0
 
 ### 本次亮点

@@ -8,6 +8,24 @@ know what changed.
 
 ---
 
+## Unreleased
+
+### Fixed
+
+- **A restored session no longer spins forever.** `usage_update` and `session_info_update` frames
+  arriving after a `session/load` were treated as conversation output, which opened a turn that
+  nothing would ever close. Only real agent output starts one now (PR #3, by
+  [@poppyer9](https://github.com/poppyer9)).
+- **The model catalog is announced when it finally arrives.** `/api/model` could answer the
+  `acp/default` placeholder while a `session/load` was still in flight; the catalog is now
+  announced after every path that can produce one.
+- **`/api/command` no longer replays every remembered session** in the directory to discover the
+  agent's slash commands — it starts one.
+- **Replayed transcripts keep their tool results**: failed and cancelled historical calls render as
+  errors, and replayed reasoning carries a time instead of spinning.
+
+---
+
 ## v0.2.0
 
 ### Highlights
