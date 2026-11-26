@@ -38,7 +38,7 @@
  * deliberately NOT part of `pnpm verify`.
  */
 import { spawn, execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -346,6 +346,23 @@ async function main() {
     }
 
     // ---- dev desktop
+    // ★ Start from a CLEAN profile. The dev desktop keeps its added servers, and every run that
+    // adds one and fails to remove it leaves a dead `127.0.0.1:<port>` behind — measured: twelve
+    // accumulated entries, each polled every few seconds, drowning the log noise that matters and
+    // making "which server is focused" unreadable. Wiping the profile before launch is the only
+    // way to guarantee the run sees exactly one bridge plus the desktop's own local server.
+    // The profile is the UNPACKAGED dev one (`ai.opencode.desktop.dev`); the user's installed
+    // desktop (`ai.opencode.desktop`) is never touched.
+    const devProfile = join(process.env.HOME ?? '', 'Library', 'Application Support', 'ai.opencode.desktop.dev');
+    if (!process.env.KEEP_PROFILE) {
+      try {
+        rmSync(devProfile, { recursive: true, force: true });
+        console.log(`  … wiped the dev desktop profile (${devProfile})`);
+      } catch (error) {
+        console.log(`  ! could not wipe the dev profile: ${String(error)}`);
+      }
+    }
+
     const dev = spawn('bun', ['run', 'dev:desktop'], {
       cwd: REPO,
       env: { ...process.env },
@@ -426,6 +443,246 @@ async function main() {
     // the UI, and it decides whether the fault is here or in the bridge.
     const bridgeRoutes = () => (bridgeLog.match(/\[http\] (?:GET|POST) \/api\/[a-z\/_0-9.-]*/g) ?? []).slice(-12);
 
+    // ★ Diagnostic, not an assertion: what the DESKTOP believes. The bridge's request log shows
+    // /api/health succeeding repeatedly yet no /api/event at all, and the session query is gated on
+    // `connection.status() === "connected"`, which the FIRST SSE frame (`server.connected`) sets.
+    // If the stream is never opened the gate never opens, and no amount of waiting helps. Print the
+    // app-side evidence (resource timing) so a fix targets the right side of the wire.
+    const appSide = await cdp.eval(`
+      const entries = performance.getEntriesByType('resource').map((e) => String(e.name));
+      // Keep the ORIGIN: the question is which server the app is talking to, and a path alone
+      // cannot answer it. Measured here first: the app listed /api/session calls while the bridge
+      // logged none, which reads as "the desktop never asked" until the origin is printed.
+      const origins = Array.from(new Set(entries.map((n) => n.split('/').slice(0, 3).join('/'))));
+      const apiCalls = Array.from(new Set(entries.filter((n) => n.indexOf('/api/') >= 0))).slice(-16);
+      return {
+        origins,
+        apiCalls,
+        eventStreams: entries.filter((n) => n.indexOf('/api/event') >= 0).length,
+      };
+    `);
+    console.log('  … app side:', JSON.stringify(appSide));
+
+    // ★ Leave exactly ONE server in the sidebar before trying to expand the bridge's group.
+    // `dev:desktop` always starts a local server of its own (OPENCODE_DESKTOP_ISOLATED_SERVER=1),
+    // so two rows of the same `127.0.0.1:<port>` shape exist and a click aimed at "the" row is a
+    // coin flip — measured across runs: one landed on the local server (whose session list is
+    // empty, so the conversation never appeared) and the next did not land at all. Removing the
+    // local one makes the click deterministic and is closer to the real path anyway: a user who
+    // added this bridge and nothing else sees one row.
+    const bridgeOrigin = new URL(bridgeUrl).origin;
+    const bridgeHostPort = bridgeOrigin.replace(/^https?:\/\//, '');
+    // ★ Read the rows the sidebar ACTUALLY shows, not the resource-timing origins: the bridge is
+    // added after that snapshot is taken, so it is missing from `appSide.origins` and the filter
+    // let it through — the run deleted its own bridge and then asked why nothing listed.
+    const shownRows = await cdp
+      .eval(`
+        return [...document.querySelectorAll('[class~="group/server"]')]
+          .map((r) => (r.innerText || '').trim().split('\n')[0])
+          .filter((row) => row.includes('127.0.0.1:'));
+      `)
+      .catch(() => []);
+    const others = (shownRows ?? [])
+      .filter((row) => !String(row).includes(bridgeHostPort))
+      .map((row) => `http://${String(row).replace(/^https?:\/\//, '')}`)
+      .filter((o, i, all) => all.indexOf(o) === i);
+    for (const origin of others) {
+      // ★ `REMOVE_SERVER` ends in `location.reload()`, which destroys the execution context the
+      // evaluate promise was resolved from — so the call resolves to `undefined` no matter what the
+      // script returned. Judge the OUTCOME from the DOM afterwards instead of from the return value;
+      // an earlier version printed "undefined" and read as a failed removal when the row was gone.
+      await cdp.eval(REMOVE_SERVER(origin)).catch(() => undefined);
+      await sleep(9000);
+      const left = await cdp
+        .eval(`
+          return new Promise((resolve) => setTimeout(() => {
+            const rows = [...document.querySelectorAll('[class~="group/server"]')].map((r) => (r.innerText || '').trim().split('\n')[0]);
+            resolve(rows);
+          }, 2000));
+        `)
+        .catch(() => []);
+      const stillThere = (left ?? []).some((row) => String(row).includes(origin.replace(/^https?:\/\//, '')));
+      console.log(`  … removed the desktop's own server ${origin}: ${stillThere ? 'STILL LISTED' : 'gone'}`);
+    }
+
+    // ★ Which server the app has FOCUSED, read from its own persisted state. `focusedServer` is
+    // `visible.find(key === selection.server) ?? visible[0]`, and `visible` is insertion-ordered
+    // with the dev desktop's own local server added first — so unless a selection names the bridge
+    // explicitly, every home-session query is aimed at the LOCAL server and the bridge is never
+    // asked for `/api/session` at all. That is the hypothesis this print tests.
+    const focused = await cdp
+      .eval(`
+        // The keys are opencode.global.dat / opencode.workspace.<dir>.<sum>.dat, not anything
+        // containing "server" — filtering by substring found nothing and printed {}.
+        const dump = { keys: [] };
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          dump.keys.push(key);
+          if (key.indexOf('opencode.global') >= 0) {
+            const raw = localStorage.getItem(key) ?? '';
+            try {
+              const parsed = JSON.parse(raw);
+              dump.global = {
+                servers: (parsed.servers?.list ?? []).map((x) => x?.http?.url ?? x),
+                hidden: parsed.servers?.hidden ?? null,
+              };
+            } catch (error) { dump.global = { raw: raw.slice(0, 300) }; }
+          }
+        }
+        return dump;
+      `)
+      .catch((error) => ({ error: String(error) }));
+    console.log('  … persisted:', JSON.stringify(focused).slice(0, 900));
+
+
+
+    // ★ Did the click FOCUS the bridge? `home.selection.focusServer(conn)` is what sets
+    // `selection().server`, and `focusedServer` is `visible.find(key === selection.server) ??
+    // visible[0]` — so an unfocused bridge means every home-session query goes to the desktop's
+    // own local server. Asking the bridge for `/api/session` after the click is the direct test:
+    // it either arrived or it did not.
+    // ★ `/api/session/active` and `/api/session?limit=…` are different requests; a pattern that
+    // accepts both reports a hit for the one that is always sent. Match the list route exactly.
+    // ★ Which row is SELECTED, straight from the DOM: `HomeServerRow` renders
+    // `data-selected` on both the row and its nav button, so this answers "did the click focus it"
+    // without needing the app's internal signals.
+    const selectionNow = await cdp
+      .eval(`
+        const rows = [...document.querySelectorAll('[class~="group/server"]')];
+        return rows.map((r) => ({
+          label: (r.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 60),
+          selected: r.hasAttribute('data-selected') || !!r.querySelector('[data-selected]'),
+        }));
+      `)
+      .catch((error) => ({ error: String(error) }));
+    console.log('  … sidebar rows:', JSON.stringify(selectionNow));
+
+    // ★ Ask the RENDERER to do what the app's health probe does. `home.projects.view` disables the
+    // server row's click when `!healthy() && !authentication()`, so a probe that fails for a reason
+    // our own `curl` cannot see (an SDK schema check, a header, a URL shape) leaves the row
+    // unclickable — and the click then does nothing at all, which is exactly what was measured.
+    const rendererHealth = await cdp
+      .eval(`
+        const want = ${JSON.stringify(bridgeUrl)};
+        const out = {};
+        try {
+          const response = await fetch(want + '/api/health');
+          out.status = response.status;
+          out.body = await response.json();
+        } catch (error) { out.error = String(error); }
+        return out;
+      `)
+      .catch((error) => ({ error: String(error) }));
+    console.log('  … renderer fetch(/api/health):', JSON.stringify(rendererHealth));
+
+    // ★ What the row actually contains, so the click can aim at the element that carries the
+    // focus handler instead of guessing by tag name. Printed once per run, kept as a record.
+    const rowMarkup = await cdp
+      .eval(`
+        const want = ${JSON.stringify(bridgeUrl)};
+        const hostPort = want.slice(want.indexOf('//') + 2);
+        const row = [...document.querySelectorAll('[class~="group/server"]')].find(
+          (r) => (r.innerText || '').indexOf(hostPort) >= 0,
+        );
+        if (!row) return { error: 'row not found' };
+        const buttons = [...row.querySelectorAll('button')].map((b) => ({
+          cls: b.className.slice(0, 80),
+          disabled: b.disabled,
+          text: (b.innerText || '').trim().slice(0, 20),
+          actions: [...b.querySelectorAll('[data-action]')].map((x) => x.getAttribute('data-action')),
+        }));
+        return { buttons };
+      `)
+      .catch((error) => ({ error: String(error) }));
+    console.log('  … bridge row buttons:', JSON.stringify(rowMarkup));
+
+    const flips = await cdp.eval('return (globalThis).__flips ?? null;').catch(() => null);
+    if (flips) console.log(`  … the bridge row's data-selected flips after the click: ${JSON.stringify(flips)}`);
+
+    // ★ Fallback path, tried only when the click left the app focused elsewhere: write the
+    // selection the app would have written. `ServerConnection.key(conn)` for an http server is
+    // simply `conn.http.url`, and the layout persists `home.selection.server` under
+    // `Persist.global("layout")`. Setting it and reloading reproduces "the user clicked the bridge
+    // and the choice stuck" without depending on where the click handler sits.
+    const stillLocal = (selectionNow ?? []).every(
+      (row) => !String(row.label).includes(new URL(bridgeUrl).host) || row.selected !== true,
+    );
+    if (stillLocal) {
+      const bridgeLocation = await fetch(`${bridgeUrl}/api/location`)
+        .then((r) => r.json())
+        .then((b) => b.directory)
+        .catch(() => undefined);
+      const dirLiteral = JSON.stringify(bridgeLocation ?? '');
+      const pageScript =
+        'const want = ' + JSON.stringify(bridgeUrl) + ';\n' +
+        'const dir = ' + JSON.stringify(bridgeLocation ?? '') + ';\n' +
+        'const layoutKey = ' + JSON.stringify('opencode.global.dat:layout') + ';\n' +
+        'const serverKey = ' + JSON.stringify('opencode.global.dat:server') + ';\n' +
+        'let layout = {};\n' +
+        'try { layout = JSON.parse(localStorage.getItem(layoutKey) || "{}"); } catch (e) { layout = {}; }\n' +
+        'const prev = (layout.home || {}).selection || {};\n' +
+        'layout.home = Object.assign({}, layout.home || {}, {\n' +
+        '  selection: Object.assign({}, prev, { server: want, directory: dir }),\n' +
+        '});\n' +
+        'localStorage.setItem(layoutKey, JSON.stringify(layout));\n' +
+        'let state = {};\n' +
+        'try { state = JSON.parse(localStorage.getItem(serverKey) || "{}"); } catch (e) { state = {}; }\n' +
+        // ★ Merge, never replace: ServerState requires list/hidden/projects/lastProject/recentlyClosed,
+        // and a partial object fails the schema decode so the whole store falls back to defaults —
+        // which silently discarded the project entry this code had just written.
+        // ★ Keep the EXISTING list. Defaulting it to [] wiped the server entries (measured:
+        // serverList came back empty, so `servers.visible` was empty, `focusedServer` resolved to
+        // undefined and nothing loaded at all). If the stored list is empty, seed it with this
+        // bridge so the app has something to focus.
+        'state = Object.assign({ hidden: {}, projects: {}, lastProject: {}, recentlyClosed: {} }, state);\n' +
+        'if (!Array.isArray(state.list) || state.list.length === 0) {' +
+        '  state.list = [{ type: "http", http: { url: want } }];' +
+        '}\n' +
+        'state.projects = Object.assign({}, state.projects);\n' +
+        'state.projects[want] = dir ? [{ worktree: dir, expanded: true }] : [];\n' +
+        'localStorage.setItem(serverKey, JSON.stringify(state));\n' +
+        'return { layout: layout.home.selection, projects: state.projects[want] };\n';
+      const forced = await cdp.eval(pageScript).catch((error) => ({ error: String(error) }));
+      console.log('  … forced selection write:', JSON.stringify(forced));
+      await cdp.eval('location.reload(); return 1;').catch(() => undefined);
+      await sleep(12000);
+    }
+
+    // ★ What the sidebar shows AFTER the selection took effect. The session query now reaches the
+    // bridge (measured: /api/session, then /api/session/<id>), so if the row still is not on screen
+    // the block is downstream of the fetch and the text is worth reading before guessing.
+    const sideText = await cdp
+      .eval('return (document.body.innerText || "").slice(0, 1200);')
+      .catch((error) => String(error));
+    console.log('  … body text:', JSON.stringify(String(sideText).slice(0, 900)));
+
+    // ★ What the app actually has in storage now (keys AND the server-state slice), after the
+    // reload had a chance to read it back. Prints rather than asserts: this is the difference
+    // between "we wrote the wrong key" and "the app read it and rejected the shape".
+    const storedNow = await cdp
+      .eval(
+        'const keys = [];' +
+        'for (let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));' +
+        'const raw = localStorage.getItem("opencode.global.dat:server");' +
+        'let parsed = null;' +
+        'try { parsed = JSON.parse(raw || "null"); } catch (e) { parsed = String(e); }' +
+        'let layout = null;' +
+        'try { layout = JSON.parse(localStorage.getItem("opencode.global.dat:layout") || "null"); } catch (e) {}' +
+        'return {' +
+        '  keys: keys,' +
+        '  serverKeys: parsed && parsed.projects ? Object.keys(parsed.projects) : null,' +
+        '  selection: layout && layout.home ? layout.home.selection : null,' +
+        '  serverList: parsed && parsed.list ? parsed.list.map((x) => (x && x.http ? x.http.url : x)) : null,' +
+        '};',
+      )
+      .catch((error) => ({ error: String(error) }));
+    console.log('  … stored after reload:', JSON.stringify(storedNow).slice(0, 700));
+
+    const sessionHits = (bridgeLog.match(/\[http\] GET \/api\/session(\?[^\s]*)?(\s|$)/g) ?? []).filter(
+      (line) => !line.includes('/api/session/'),
+    ).length;
+    console.log(`  … GET /api/session reached the bridge: ${sessionHits}`);
+
     const listed = await waitFor(async () => {
       const body = await cdp.eval(`
         const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -434,15 +691,46 @@ async function main() {
           for (const type of ['pointerdown', 'pointerup']) el.dispatchEvent(new PointerEvent(type, { bubbles: true }));
           el.click();
         };
-        // the server group's row: its class is group/server (with a slash), so match by attribute
-        const row = [...document.querySelectorAll('[class~="group/server"]')].find((r) => /127\.0\.0\.1:\d+/.test(text(r)));
+        // ★ Match the BRIDGE, not "any 127.0.0.1:port". The dev desktop has its OWN local server
+        // in this list, and its address is also 127.0.0.1:<port>; matching the first row of that
+        // shape opened the local server instead, whose session list is empty and whose requests
+        // never reach the bridge — which read as "the desktop never asked for sessions" for three
+        // runs. The origin is the only reliable key.
+        const WANT = ${JSON.stringify(bridgeUrl)};
+        // strip the scheme without a regex literal: backslashes inside this template are consumed
+        // before the page ever sees them, and a regex here fails to even parse
+        const hostPort = WANT.slice(WANT.indexOf('//') + 2);
+        const rows = () => [...document.querySelectorAll('[class~="group/server"]')];
+        const row = rows().find((r) => text(r).includes(hostPort));
+        // ★ Click the FOCUS control, not the first button in the row. The row's first button is
+        // the collapse chevron (data-action=home-server-collapse); focusing the server is
+        // HomeProjectNavButton's onClick, one level in. Clicking the chevron collapses a group and
+        // never changes the selection — measured: the row stayed selected:false while the click
+        // "succeeded".
+        const focusButton = (node) => {
+          const nav = node.querySelector('button:not([data-action="home-server-collapse"])');
+          if (nav) return nav;
+          const chevron = node.querySelector('[data-action="home-server-collapse"]');
+          return chevron ? (chevron.closest('button') ?? node) : node;
+        };
         if (row) {
-          click(row.querySelector('button') || row);
+          // Watch the row's data-selected attribute while the click lands: if it never flips, the
+          // handler did not run (or the selection was rejected); if it flips and flips back, the
+          // app re-selected something else right after.
+          const flips = [];
+          const observer = new MutationObserver(() => {
+            flips.push(row.hasAttribute('data-selected') || !!row.querySelector('[data-selected]'));
+          });
+          observer.observe(row, { attributes: true, subtree: true, attributeFilter: ['data-selected'] });
+          click(focusButton(row));
+          await sleep(3000);
+          observer.disconnect();
+          (globalThis).__flips = flips;
           await sleep(4000);
           // a second pass: the first click can land before the tree has painted
-          if (!document.body.innerText.includes(${JSON.stringify('session.id')})) {
-            const again = [...document.querySelectorAll('[class~="group/server"]')].find((r) => /127\.0\.0\.1:\d+/.test(text(r)));
-            if (again) { click(again.querySelector('button') || again); await sleep(3000); }
+          if (!document.body.innerText.includes(session.id)) {
+            const again = rows().find((r) => text(r).includes(hostPort));
+            if (again) { click(focusButton(again)); await sleep(3000); }
           }
         }
         return document.body.innerText;

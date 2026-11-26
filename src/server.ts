@@ -887,6 +887,7 @@ export class BridgeServer {
           id: dir === this.location.directory ? this.location.project.id : projectIdFor(dir),
           directory: dir,
           canonical: dir,
+          worktree: dir,
         },
       });
       return;
@@ -1334,6 +1335,14 @@ export class BridgeServer {
           id: projectIdFor(directory),
           directory,
           canonical: directory,
+          // ★ The desktop's own project type is `Partial<Project> & { worktree: string }`, and it
+          // groups sessions by `project.worktree` (`home/projects/controller.tsx`: `[project.worktree,
+          // ...(project.sandboxes ?? [])]`). Without it every session is keyed to `undefined` and the
+          // sidebar renders its empty state while the session query has already succeeded — measured:
+          // the bridge received `/api/session` AND `/api/session/<id>`, and the screen still said
+          // "这里还没有内容".
+          worktree: directory,
+          expanded: true,
         })),
       );
       return;
