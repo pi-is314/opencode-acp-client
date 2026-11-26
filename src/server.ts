@@ -5644,7 +5644,7 @@ export function promptParts(payload: PromptBody): Array<{ type: string; text?: s
     // images are read and inlined as base64 ACP image blocks; non-image files
     // and directories are forwarded as baseline ACP `resource_link` blocks.
     if (typeof file.uri === 'string' && file.uri.startsWith('file://')) {
-      const name = file.name ?? decodeURIComponent(file.uri).replace(/\/+$/, '').split('/').pop() ?? '';
+      const name = file.name ?? decodeURIComponent(file.uri).replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? '';
       const looksImage = /^image\//i.test(mime) || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name);
       if (!looksImage) {
         blocks.push({
