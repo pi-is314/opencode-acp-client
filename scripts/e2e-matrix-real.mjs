@@ -5,6 +5,21 @@
  *   node scripts/e2e-matrix-real.mjs                 # whatever TUI versions and agents it finds
  *   node scripts/e2e-matrix-real.mjs --tui 2.1.4 --agents opencode,qwen
  *
+ * ★ The Gemini-family agents need three environment variables, or their cells come back BLOCKED
+ * for reasons that belong to the agent (see `../antigravity-cli/LOCAL-SETUP.md`):
+ *
+ *   NO_PROXY=127.0.0.1,localhost,::1
+ *   GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:15721/antigravity     # else it calls Google: 400 API_KEY_INVALID
+ *   GEMINI_API_KEY=<36-char key>                                  # else 401 UNAUTHENTICATED
+ *
+ * Two measured traps, both recorded in LOCAL-SETUP.md and both fixed here rather than left as
+ * "BLOCKED" cells that read like dead agents:
+ *   · gemini-cli shells out to `sysctl` at startup, so it needs `/usr/sbin` on PATH — a launcher
+ *     script does not have it (see `withSystemBinaries` below);
+ *   · gemini-cli sends a `generationConfig.topK` above 40 on some TUI versions and the gateway
+ *     rejects it with 400. That one is the AGENT's, not the bridge's: the matrix reports it and
+ *     moves on.
+ *
  * ★ Why this exists next to the other two. `scripts/e2e-agent-matrix.sh` runs agents through
  * the real TUI in tmux, which cannot run on Windows and grades from a captured pane — a source
  * that mis-graded three cells (the agents' own credential errors reach the screen as
@@ -144,8 +159,36 @@ function discoverAgents() {
       command:
         adapter('@deepseek-ai/dsh', 'lib/bin.js', '--profile', 'acp') ?? ['dsh', '--profile', 'acp'],
     },
+    {
+      // Antigravity. Needs three env vars and a 36-character key to point it at a custom
+      // endpoint (see `antigravity-cli/LOCAL-SETUP.md`, which is where this was worked out):
+      // without `GOOGLE_GEMINI_BASE_URL` it calls Google directly and answers 400
+      // API_KEY_INVALID, and a key that is not 36 characters gets 401 UNAUTHENTICATED from the
+      // gateway. `agy acp` takes no --model/--effort; both are negotiated over ACP.
+      id: 'agy',
+      command: ['agy', 'acp'],
+    },
+    {
+      // gemini-cli's own ACP server. Same three variables as `agy`, different dialect
+      // (google.genai rather than `agy`'s adapter).
+      id: 'gemini',
+      command: ['gemini', '--acp'],
+    },
   ];
   return candidates;
+}
+
+/**
+ * The directories a login shell has that a launcher script usually does not.
+ *
+ * `gemini-cli` calls `sysctl` (macOS) and looks for `ss`/`netstat` (Linux) from the sbin
+ * directories; a process started from a shell script or a CI step sees a PATH without them, so
+ * the agent dies with ENOENT at startup and the failure surfaces as "agent exited".
+ */
+function withSystemBinaries(path) {
+  const extra = ['/usr/sbin', '/sbin', '/usr/local/sbin'];
+  const have = new Set((path ?? '').split(':').filter(Boolean));
+  return [...have, ...extra.filter((dir) => !have.has(dir))].join(':');
 }
 
 // ---------------------------------------------------------------- one cell
@@ -162,6 +205,12 @@ async function runCell(tui, agent) {
       cwd: ROOT,
       env: {
         ...process.env,
+        // ★ Inherit the login shell's PATH shape. A process launched from a script does NOT get
+        // `/usr/sbin`, and gemini-cli shells out to `sysctl` from there at startup
+        // (`systemArchitectureSync`) — without it the agent dies with ENOENT before answering
+        // `initialize`, and the matrix reports a BLOCKED cell that looks like a dead agent.
+        // Measured on macOS: `gemini --acp` works in a login shell and exits instantly here.
+        PATH: withSystemBinaries(process.env.PATH),
         OPENCODE_ACP_CLIENT_SESSION_MAP: join(work, 'sessions.json'),
         // OPENCODE_BIN is the TUI binary, NOT the agent's. Setting it here made the bridge
         // resolve a version and probe it while the agent was starting, which is work this cell
