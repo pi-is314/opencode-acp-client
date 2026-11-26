@@ -1957,7 +1957,12 @@ describe('the skill attachment path', () => {
       // ★ Both sides through `realpath` before comparing: on Windows the same directory has
       // a short (8.3) and a long spelling, and the bridge reports whichever one its own cwd
       // string carried. `realpathSync.native` canonicalises both to the long form.
-      expect(text).toContain(`Base directory for this skill: ${sameDir(skillDir)}`);
+      // ★ `text` is `JSON.stringify` of the content, so a Windows path arrives with its
+      // separators ESCAPED (`C:\\oac\\...`). Compare the JSON spelling of the expected value
+      // rather than the raw path — the assertion is "the skill's base directory reached the
+      // agent", not "the JSON escaping looks a particular way". (Measured on Windows: the
+      // raw comparison failed there while passing everywhere else.)
+      expect(text).toContain(JSON.stringify(`Base directory for this skill: ${sameDir(skillDir)}`).slice(1, -1));
     } finally {
       deferredRemovals.push(join(process.cwd(), '.opencode'));
       deferredRemovals.push(home);
@@ -2174,7 +2179,9 @@ describe('the /cd move', () => {
       await runTurn(second, session, 'after the restart');
       const reply = (await messages(second, session)).find((item) => item.type === 'assistant');
       const text = JSON.stringify((reply?.content ?? []).filter((entry) => entry.type === 'text'));
-      expect(text).toContain(`cwd: ${target}`);
+      // Same JSON-escaping trap as the skill test above: `text` is stringified, so a Windows
+      // path arrives with `\\` in it and the raw comparison cannot match.
+      expect(text).toContain(JSON.stringify(`cwd: ${target}`).slice(1, -1));
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
