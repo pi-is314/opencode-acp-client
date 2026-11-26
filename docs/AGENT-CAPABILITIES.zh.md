@@ -117,12 +117,18 @@ oc-acp-client -- npx -y @agentclientprotocol/codex-acp
 `modelProvider: "gemini"`**。缺了 settings 里那一项，它会去连 Google，然后在 `session/new` 上回
 `Authentication required`。
 
-在 **Linux** 上它装得上、鉴权也过（它自己的 `acp-server-*.log` 里写着
-`ChainedAuth: authenticated via gemini_api_key`），但 `session/new` 报
-`Failed to start Antigravity conversation`；同一份日志里还有
-`failed to add workspace folder … (it might already be tracked)` 和
-`failed to create conversation: canceled: context canceled`。那是 agent 自己的内部状态，不是桥的
-问题：桥只是把它递过来的那句话转述出去。**算 BLOCKED，不是 FAILED** —— macOS 已证明这一对是通的。
+**Linux 上也能跑，5/5** —— 但前提是请求**串行**。`agy` 会**并发**处理 `initialize` 与
+`session/new`（日志里 `ACP Request received: session/new` 先于 `initialize` 把后端启动完就出现），
+而后端还在 boot 时到达的 `session/new` 会被取消：日志先 `Booting backend`，随后
+`failed to create conversation: canceled: context canceled`。所以**把两帧 JSON 一次性灌进 stdin 的
+手写探针能复现一个桥永远不会触发的失败** —— `AcpClient` 会 `await initialize()` 之后才
+`newSession()`。实测：同一支探针改成等 boot 日志出现后再发 `session/new`，返回的 `{"id":2}` 与 macOS
+一模一样。
+
+Linux 上它同样需要 `~/.gemini/antigravity-cli/settings.json`（`modelProvider: "gemini"`），以及一个
+**真的提供 `/antigravity` 的 gateway** —— 那台 Linux 上的 `codemaker-hub`（端口 12300）就是
+（`/v1/models` 与 `/antigravity` 都应答）。⚠️ 探错端口时 `/antigravity` 返回 404 而 `/v1/models`
+仍返回 200，看起来像「这代理没有 antigravity」，其实只是端口不对。
 
 ### 2.6 `gemini --acp`（gemini-cli）：ACP 路径不认 `customAliases`
 

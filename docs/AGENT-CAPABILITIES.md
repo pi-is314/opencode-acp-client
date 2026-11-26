@@ -124,13 +124,19 @@ and a 36-character `GEMINI_API_KEY` — **plus `modelProvider: "gemini"` in
 `~/.gemini/antigravity-cli/settings.json`**. Without the settings key it authenticates against
 Google instead and answers `Authentication required` at `session/new`.
 
-On the **Linux** host it installs and authenticates (`ChainedAuth: authenticated via
-gemini_api_key` in its own `acp-server-*.log`) but then fails `session/new` with
-`Failed to start Antigravity conversation`; the same log shows
-`failed to add workspace folder … (it might already be tracked)` and
-`failed to create conversation: canceled: context canceled`. That is the agent's own internal
-state, not the bridge's: the bridge only carries the sentence it was handed. **BLOCKED, not
-FAILED** — macOS proves the pair works.
+**Linux works too, 5/5** — but only when the requests are serialised. `agy` handles
+`initialize` and `session/new` CONCURRENTLY (`ACP Request received: session/new` arrives before
+`initialize` has finished booting the backend), and a `session/new` that lands during boot is
+cancelled: the log reads `Booting backend`, then
+`failed to create conversation: canceled: context canceled`. A hand-written probe that pipes both
+JSON frames into stdin at once therefore reproduces a failure that the bridge never triggers —
+`AcpClient` awaits `initialize()` before `newSession()`. Measured: the same probe writing
+`session/new` only after the boot log appears answers `{"id":2}` exactly like macOS.
+
+On Linux it also needs `~/.gemini/antigravity-cli/settings.json` (`modelProvider: "gemini"`) and a
+gateway that actually serves `/antigravity` — the Linux box's `codemaker-hub` on port 12300 does
+(`/v1/models` and `/antigravity` both answer there; a probe against the wrong port returns 404 on
+`/antigravity` while `/v1/models` still says 200, which reads like "no antigravity here").
 
 ### 2.6 `gemini --acp` (gemini-cli) — the ACP path ignores `customAliases`
 
