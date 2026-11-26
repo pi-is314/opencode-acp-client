@@ -150,6 +150,10 @@ and a short pitch, and leave the depth to pages below.
 light and dark. `logo.png` / `logo.svg` at the repository root are that mark, and the README leads
 with it.
 
+★ **Shipped in v0.2.0** (2026-11-26): `logo.png` / `logo.svg` at the repository root, the four
+letters the exit wordmark was missing, and [CHANGELOG.md](../CHANGELOG.md) as the release record.
+The README trim and the screenshot below are **still open** — this section is about those two now.
+
 ★ **What a file at the root does NOT do** (measured 2026-11-24, when the repository icon did not
 change after `logo.png` was pushed): **GitHub does not take a repository avatar from it.** A
 repository has no avatar of its own — its icon in a list is the owner's avatar, an organisation's

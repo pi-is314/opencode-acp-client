@@ -42,6 +42,7 @@
 | 10 | [docs/SESSION-LIFECYCLE.zh.md](docs/SESSION-LIFECYCLE.zh.md) | ★ **session 全机制**：双 id 与映射表、三条恢复链路、`-c`/`--session`/adoption、排序与 epilogue、五个时序雷区（每个机制都对应一次实测故障）|
 | 11 | [docs/E2E-PITFALLS.zh.md](docs/E2E-PITFALLS.zh.md) | ★★ **写 e2e 脚本的禁忌**：固定端口、按时长等、按 UI 文案断言、cleanup 杀别人、模态框挡路……**每一条都已让人白跑一整轮门控**。改 `scripts/e2e-*.sh` 前先扫一遍 |
 | 12 | [docs/ROADMAP.zh.md](docs/ROADMAP.zh.md) | ★ **已知要做、当前不做**的三件事（desktop、ACP v2、常驻桥），以及各自**为什么现在不做**——动手前先读这一页，别从零调研 |
+| 13 | [CHANGELOG.zh.md](CHANGELOG.zh.md) | ★ **每个已发布版本变了什么**，一个主题一节。写给用户看的，不是维护者 —— 背后的事实都在上面那些页面里。**打 tag 前要和 `package.json` 一起改**，并且每条都要在 [CHANGELOG.md](CHANGELOG.md) 里有对应。 |
 | — | 源码 | `src/index.ts`（CLI/单入口生命周期）→ `src/server.ts`（HTTP/SSE + 会话投影，**最重的一个文件**）→ `src/acp/client.ts`（**ACP 协议实现**）→ `src/translate/events.ts`（翻译层）|
 
 **协议原文**：<https://agentclientprotocol.com/protocol/v1/overview>（**页面加 `.md` 取纯文本**；全站索引见 <https://agentclientprotocol.com/llms.txt>）；

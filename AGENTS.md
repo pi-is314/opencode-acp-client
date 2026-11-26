@@ -44,6 +44,7 @@
 | 10 | [docs/SESSION-LIFECYCLE.md](docs/SESSION-LIFECYCLE.md) | ★ **The whole session machinery**: dual ids and the map, the three resume paths, `-c`/`--session`/adoption, ordering and the epilogue, five timing traps (each tied to a measured failure) |
 | 11 | [docs/E2E-PITFALLS.md](docs/E2E-PITFALLS.md) | ★★ **pitfalls when writing e2e scripts**: pinned ports, waiting for durations, asserting on UI wording, cleanup killing other runs, modal dialogs — **each one has already cost a whole gate run**. Read before editing `scripts/e2e-*.sh` |
 | 12 | [docs/ROADMAP.md](docs/ROADMAP.md) | ★ **known work deliberately not in this version** (desktop, ACP v2, a resident bridge), each with **why it is deferred** — read this before starting any of them instead of re-researching |
+| 13 | [CHANGELOG.md](CHANGELOG.md) | ★ **what changed in each released version**, one section per theme. Written for users, not for maintainers — the facts behind it live in the pages above. **Bump it and `package.json` together before tagging**, and mirror every entry in [CHANGELOG.zh.md](CHANGELOG.zh.md). |
 | — | Source | `src/index.ts` (CLI / single-entry lifecycle) → `src/server.ts` (HTTP/SSE + session projection, **the heaviest file**) → `src/acp/client.ts` (**the ACP protocol implementation**) → `src/translate/events.ts` (the translation layer) |
 
 **Protocol text**: <https://agentclientprotocol.com/protocol/v1/overview> (**append `.md` for plain text**; the index is <https://agentclientprotocol.com/llms.txt>);
