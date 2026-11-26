@@ -116,6 +116,48 @@ oc-acp-client -- npx -y @agentclientprotocol/codex-acp
 - Auth: both `api-key` and `chat-gpt`.
 - **End-to-end not fully verified** (same as above).
 
+### 2.5 `agy acp` (Antigravity) — macOS yes, Linux blocked inside the agent
+
+`agy acp` completes a 3-turn conversation on **macOS** (5/5 TUI versions, `gemini-3.1-pro-low`).
+It needs three variables pointing at a gateway — `NO_PROXY`, `GOOGLE_GEMINI_BASE_URL=<host>/antigravity`
+and a 36-character `GEMINI_API_KEY` — **plus `modelProvider: "gemini"` in
+`~/.gemini/antigravity-cli/settings.json`**. Without the settings key it authenticates against
+Google instead and answers `Authentication required` at `session/new`.
+
+On the **Linux** host it installs and authenticates (`ChainedAuth: authenticated via
+gemini_api_key` in its own `acp-server-*.log`) but then fails `session/new` with
+`Failed to start Antigravity conversation`; the same log shows
+`failed to add workspace folder … (it might already be tracked)` and
+`failed to create conversation: canceled: context canceled`. That is the agent's own internal
+state, not the bridge's: the bridge only carries the sentence it was handed. **BLOCKED, not
+FAILED** — macOS proves the pair works.
+
+### 2.6 `gemini --acp` (gemini-cli) — the ACP path ignores `customAliases`
+
+Measured on gemini-cli 0.71.1 against the same gateway. The failure is a 400:
+
+    body field generationConfig.topK must less than or equal 40
+
+★ **The cause is in gemini-cli, and it is a CLI/ACP divergence.** The gateway caps `topK` at 40,
+gemini-cli's built-in `chat-base` preset hard-codes 64, and the documented workaround —
+`modelConfigs.customAliases` with `generateContentConfig: {topK: 40}` — **works in CLI mode and is
+ignored in ACP mode**:
+
+| mode | command | result |
+|---|---|---|
+| CLI | `gemini -m cm-gemini -p "say hi"` | ✅ answers |
+| ACP | `gemini --acp` → `session/new` | ✅ returns `models.currentModelId: "cm-gemini"` … |
+| ACP | … then a prompt | ❌ 400 `topK` |
+
+The bundle makes it explicit (`bundle/chunk-5XMSOGIG.js`): the ACP server walks
+`modelConfigs.customAliases` **only to collect the alias NAMES into `validModels`** — it never
+applies the alias's `modelConfig`. So the name is accepted while the parameters stay at the
+built-in preset. Nothing on this side can fix that: the bridge sends `session/set_model` /
+`session/set_config_option` as ACP defines them and the agent does the rest.
+
+Practical workaround until upstream changes it: use `agy acp` for Gemini under ACP (it applies its
+own config), or point gemini-cli at a gateway that accepts `topK: 64`.
+
 ## 3. The general mapping: lose a capability, see what
 
 | agent lacks | still works | example |

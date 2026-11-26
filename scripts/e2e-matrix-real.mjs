@@ -9,8 +9,14 @@
  * for reasons that belong to the agent (see `../antigravity-cli/LOCAL-SETUP.md`):
  *
  *   NO_PROXY=127.0.0.1,localhost,::1
- *   GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:15721/antigravity     # else it calls Google: 400 API_KEY_INVALID
- *   GEMINI_API_KEY=<36-char key>                                  # else 401 UNAUTHENTICATED
+ *   GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:<gateway>/antigravity  # else it calls Google: 400 API_KEY_INVALID
+ *   GEMINI_API_KEY=<36-char key>                                   # else 401 UNAUTHENTICATED
+ *
+ * The gateway PORT is per machine and the variable is therefore not defaulted here: macOS uses
+ * 15721, the Linux box runs its gateway on 12300 (`codemaker-hub`). Same path suffix, different
+ * port — and a `curl` against the wrong one answers 404 on `/antigravity` while `/v1/models`
+ * still says 200, which reads like "this proxy has no antigravity" when it is simply the wrong
+ * port.
  *
  * Two measured traps, both recorded in LOCAL-SETUP.md and both fixed here rather than left as
  * "BLOCKED" cells that read like dead agents:

@@ -109,6 +109,46 @@ oc-acp-client -- npx -y @agentclientprotocol/codex-acp
 - **端到端未充分验证**（同上）。待补：`AGENT="npx -y @agentclientprotocol/codex-acp" ...`
   加一次真 TUI 回合。
 
+### 2.5 `agy acp`（Antigravity）：macOS 可以，Linux 卡在 agent 内部
+
+`agy acp` 在 **macOS** 上能跑完 3 轮对话（5 个 TUI 版本 5/5，`gemini-3.1-pro-low`）。
+它需要三个指向 gateway 的变量 —— `NO_PROXY`、`GOOGLE_GEMINI_BASE_URL=<host>/antigravity`、
+36 位的 `GEMINI_API_KEY` —— **外加 `~/.gemini/antigravity-cli/settings.json` 里的
+`modelProvider: "gemini"`**。缺了 settings 里那一项，它会去连 Google，然后在 `session/new` 上回
+`Authentication required`。
+
+在 **Linux** 上它装得上、鉴权也过（它自己的 `acp-server-*.log` 里写着
+`ChainedAuth: authenticated via gemini_api_key`），但 `session/new` 报
+`Failed to start Antigravity conversation`；同一份日志里还有
+`failed to add workspace folder … (it might already be tracked)` 和
+`failed to create conversation: canceled: context canceled`。那是 agent 自己的内部状态，不是桥的
+问题：桥只是把它递过来的那句话转述出去。**算 BLOCKED，不是 FAILED** —— macOS 已证明这一对是通的。
+
+### 2.6 `gemini --acp`（gemini-cli）：ACP 路径不认 `customAliases`
+
+在 gemini-cli 0.71.1 上对着同一个 gateway 实测。失败是一个 400：
+
+    body field generationConfig.topK must less than or equal 40
+
+★ **根因在 gemini-cli，是 CLI 与 ACP 的行为分歧。** gateway 把 `topK` 上限定在 40，gemini-cli
+内置的 `chat-base` 预设硬编码 64，而文档给的绕过办法 —— 用
+`modelConfigs.customAliases` 配 `generateContentConfig: {topK: 40}` —— **在 CLI 模式有效，在 ACP
+模式被忽略**：
+
+| 模式 | 命令 | 结果 |
+|---|---|---|
+| CLI | `gemini -m cm-gemini -p "say hi"` | ✅ 正常回答 |
+| ACP | `gemini --acp` → `session/new` | ✅ 返回 `models.currentModelId: "cm-gemini"` … |
+| ACP | … 再发 prompt | ❌ 400 `topK` |
+
+bundle 里写得很清楚（`bundle/chunk-5XMSOGIG.js`）：ACP 服务器遍历
+`modelConfigs.customAliases` **只是为了把 alias 的「名字」收进 `validModels`**，从不应用 alias 的
+`modelConfig`。于是名字被接受了，参数仍是内置预设。这一侧修不了：桥只按 ACP 的定义发
+`session/set_model` / `session/set_config_option`，剩下的由 agent 决定。
+
+在上游改动之前可行的绕过：ACP 下用 `agy acp` 跑 Gemini（它自己应用配置），或者把 gemini-cli 指向
+一个接受 `topK: 64` 的 gateway。
+
 ## 3. 通用映射：缺一个能力，用户看到什么
 
 | agent 缺 | 仍然可用 | 现成例子 |
