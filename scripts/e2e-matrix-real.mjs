@@ -12,6 +12,14 @@
  *   GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:<gateway>/antigravity  # else it calls Google: 400 API_KEY_INVALID
  *   GEMINI_API_KEY=<36-char key>                                   # else 401 UNAUTHENTICATED
  *
+ * ★ AND `~/.gemini/settings.json` must exist, with a `customAliases` entry whose
+ * `generateContentConfig.topK` is <= 40. Without it gemini-cli sends `topK: 64` from its
+ * built-in `chat-base` preset and a gateway that caps it at 40 answers
+ * `body field generationConfig.topK must less than or equal 40` — every cell BLOCKED for a
+ * reason that is the agent's own configuration, not the bridge's. Measured on all three
+ * platforms: with the file PASS, without it BLOCKED. The alias does apply under ACP; an
+ * earlier note claiming otherwise was wrong. See docs/AGENT-CAPABILITIES.md §2.6.
+ *
  * The gateway PORT is per machine and the variable is therefore not defaulted here: macOS uses
  * 15721, the Linux box runs its gateway on 12300 (`codemaker-hub`). Same path suffix, different
  * port — and a `curl` against the wrong one answers 404 on `/antigravity` while `/v1/models`

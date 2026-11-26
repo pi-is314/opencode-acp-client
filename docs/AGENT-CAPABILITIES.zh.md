@@ -130,30 +130,53 @@ Linux 上它同样需要 `~/.gemini/antigravity-cli/settings.json`（`modelProvi
 （`/v1/models` 与 `/antigravity` 都应答）。⚠️ 探错端口时 `/antigravity` 返回 404 而 `/v1/models`
 仍返回 200，看起来像「这代理没有 antigravity」，其实只是端口不对。
 
-### 2.6 `gemini --acp`（gemini-cli）：ACP 路径不认 `customAliases`
+### 2.6 `gemini --acp`（gemini-cli）：能跑，但**必须有 settings 文件**
 
-在 gemini-cli 0.71.1 上对着同一个 gateway 实测。失败是一个 400：
+★ **只要 `~/.gemini/settings.json` 就位，`gemini --acp` 在三个平台上全过。**
+这个文件不是可选的：缺了它，agent 会用内置 `chat-base` 预设发出 `topK: 64`，而把 `topK`
+上限定在 40 的网关回：
 
     body field generationConfig.topK must less than or equal 40
 
-★ **根因在 gemini-cli，是 CLI 与 ACP 的行为分歧。** gateway 把 `topK` 上限定在 40，gemini-cli
-内置的 `chat-base` 预设硬编码 64，而文档给的绕过办法 —— 用
-`modelConfigs.customAliases` 配 `generateContentConfig: {topK: 40}` —— **在 CLI 模式有效，在 ACP
-模式被忽略**：
+解法是一条 `customAliases`，用它的 `generateContentConfig` 覆盖：
 
-| 模式 | 命令 | 结果 |
-|---|---|---|
-| CLI | `gemini -m cm-gemini -p "say hi"` | ✅ 正常回答 |
-| ACP | `gemini --acp` → `session/new` | ✅ 返回 `models.currentModelId: "cm-gemini"` … |
-| ACP | … 再发 prompt | ❌ 400 `topK` |
+```json
+{
+  "security": { "auth": { "selectedType": "gemini-api-key" } },
+  "model": { "name": "cm-gemini" },
+  "modelConfigs": {
+    "customAliases": {
+      "cm-gemini": {
+        "extends": "chat-base-3",
+        "modelConfig": {
+          "model": "gemini-3.1-pro",
+          "generateContentConfig": { "topK": 40 }
+        }
+      }
+    }
+  }
+}
+```
 
-bundle 里写得很清楚（`bundle/chunk-5XMSOGIG.js`）：ACP 服务器遍历
-`modelConfigs.customAliases` **只是为了把 alias 的「名字」收进 `validModels`**，从不应用 alias 的
-`modelConfig`。于是名字被接受了，参数仍是内置预设。这一侧修不了：桥只按 ACP 的定义发
-`session/set_model` / `session/set_config_option`，剩下的由 agent 决定。
+实测：每平台跑一次 `pnpm e2e:matrix --tui 2.4.1 --agents gemini`。
 
-在上游改动之前可行的绕过：ACP 下用 `agy acp` 跑 Gemini（它自己应用配置），或者把 gemini-cli 指向
-一个接受 `topK: 64` 的 gateway。
+| 平台 | gemini-cli | `~/.gemini/settings.json` | 结果 |
+|---|---|---|---|
+| macOS 15.8.3 | 0.71.1 | 有 | **PASS** |
+| Debian 12 | 0.70.0 | 有（本次运行里写的）| **PASS** |
+| Windows 11 | 0.71.1 | 有（本次运行里写的）| **PASS** |
+| Windows 11 | 0.71.1 | **没有** | BLOCKED，就是上面那个 `topK` 400 |
+
+**以后 gemini 的细胞报 BLOCKED，第一件事就是查这个文件。** 它属于 agent 自己的配置，不是桥的问题：
+桥只按 ACP 的定义发 `session/set_config_option`，请求体里放什么由 agent 决定。
+
+★ 一条值得记下的更正：本页早先写着“ACP 路径**忽略** `customAliases`、只用内置预设”。那是错的 ——
+它是从 bundle 里一段“遍历 `customAliases` 收集合法模型**名字**”的代码推断出来的，那是另一个用途。
+alias 在 ACP 下**确实生效**；之前的失败是 Linux/Windows 缺文件、macOS 那边是别的原因。
+
+★ 每个平台还需要：给网关主机配 `NO_PROXY`、`GOOGLE_GEMINI_BASE_URL` 指向
+`<gateway>/antigravity`、36 位的 `GEMINI_API_KEY`，以及无头运行时加
+`GEMINI_CLI_TRUST_WORKSPACE=true` —— 否则 agent 会拒绝一个不受信任的目录。
 
 ## 3. 通用映射：缺一个能力，用户看到什么
 

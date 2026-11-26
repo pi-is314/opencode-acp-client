@@ -138,31 +138,56 @@ gateway that actually serves `/antigravity` — the Linux box's `codemaker-hub` 
 (`/v1/models` and `/antigravity` both answer there; a probe against the wrong port returns 404 on
 `/antigravity` while `/v1/models` still says 200, which reads like "no antigravity here").
 
-### 2.6 `gemini --acp` (gemini-cli) — the ACP path ignores `customAliases`
+### 2.6 `gemini --acp` (gemini-cli) — works everywhere, but ONLY with a settings file
 
-Measured on gemini-cli 0.71.1 against the same gateway. The failure is a 400:
+★ **`gemini --acp` passes on all three platforms once `~/.gemini/settings.json` is in place.**
+That file is not optional: without it the agent sends `topK: 64` from its built-in `chat-base`
+preset and a gateway that caps `topK` at 40 answers
 
     body field generationConfig.topK must less than or equal 40
 
-★ **The cause is in gemini-cli, and it is a CLI/ACP divergence.** The gateway caps `topK` at 40,
-gemini-cli's built-in `chat-base` preset hard-codes 64, and the documented workaround —
-`modelConfigs.customAliases` with `generateContentConfig: {topK: 40}` — **works in CLI mode and is
-ignored in ACP mode**:
+The fix is a `customAliases` entry whose `generateContentConfig` overrides it:
 
-| mode | command | result |
-|---|---|---|
-| CLI | `gemini -m cm-gemini -p "say hi"` | ✅ answers |
-| ACP | `gemini --acp` → `session/new` | ✅ returns `models.currentModelId: "cm-gemini"` … |
-| ACP | … then a prompt | ❌ 400 `topK` |
+```json
+{
+  "security": { "auth": { "selectedType": "gemini-api-key" } },
+  "model": { "name": "cm-gemini" },
+  "modelConfigs": {
+    "customAliases": {
+      "cm-gemini": {
+        "extends": "chat-base-3",
+        "modelConfig": {
+          "model": "gemini-3.1-pro",
+          "generateContentConfig": { "topK": 40 }
+        }
+      }
+    }
+  }
+}
+```
 
-The bundle makes it explicit (`bundle/chunk-5XMSOGIG.js`): the ACP server walks
-`modelConfigs.customAliases` **only to collect the alias NAMES into `validModels`** — it never
-applies the alias's `modelConfig`. So the name is accepted while the parameters stay at the
-built-in preset. Nothing on this side can fix that: the bridge sends `session/set_model` /
-`session/set_config_option` as ACP defines them and the agent does the rest.
+Measured, one cell of `pnpm e2e:matrix --tui 2.4.1 --agents gemini` per platform:
 
-Practical workaround until upstream changes it: use `agy acp` for Gemini under ACP (it applies its
-own config), or point gemini-cli at a gateway that accepts `topK: 64`.
+| platform | gemini-cli | `~/.gemini/settings.json` | result |
+|---|---|---|---|
+| macOS 15.8.3 | 0.71.1 | yes | **PASS** |
+| Debian 12 | 0.70.0 | yes (written during this run) | **PASS** |
+| Windows 11 | 0.71.1 | yes (written during this run) | **PASS** |
+| Windows 11 | 0.71.1 | **no** | BLOCKED, the `topK` 400 above |
+
+**Check this file first whenever a gemini cell comes back BLOCKED.** It is the agent's own
+configuration, not the bridge's: the bridge sends `session/set_config_option` exactly as ACP
+defines it, and the agent chooses what to put in the request body.
+
+★ A correction worth recording: an earlier revision of this page claimed the ACP path **ignores**
+`customAliases` and applies only the built-in preset. That was wrong — it was inferred from a
+bundle fragment that walks `customAliases` to collect valid model NAMES, which is a different use.
+The alias does apply under ACP; the failures were a missing file on Linux/Windows and a stale
+gateway on macOS.
+
+★ Also needed on every platform: `NO_PROXY` for the gateway's host, `GOOGLE_GEMINI_BASE_URL`
+pointing at `<gateway>/antigravity`, a 36-character `GEMINI_API_KEY`, and — for headless runs —
+`GEMINI_CLI_TRUST_WORKSPACE=true`, without which the agent refuses an untrusted directory.
 
 ## 3. The general mapping: lose a capability, see what
 
