@@ -138,6 +138,57 @@ gateway that actually serves `/antigravity` — the Linux box's `codemaker-hub` 
 (`/v1/models` and `/antigravity` both answer there; a probe against the wrong port returns 404 on
 `/antigravity` while `/v1/models` still says 200, which reads like "no antigravity here").
 
+### 2.7 `pi-acp` (pi coding agent) — passes on all three platforms
+
+`pi-acp` (0.0.35) is an ACP adapter for `pi` (`@earendil-works/pi-coding-agent`, 1.6.1): it spawns
+`pi --mode rpc` and bridges requests and events between the two. It advertises
+`loadSession: true`, `promptCapabilities.image`, `sessionCapabilities {list, delete}`, and its
+sessions reattach through `~/.pi/pi-acp/session-map.json`.
+
+Measured with `pnpm e2e:matrix --agents pi` — **5 TUI builds × 3 platforms, 15/15 PASS**, every cell
+reporting the real catalog `codemaker/deepseek-v4-flash` through the LAN proxy, 3 turns, history
+intact: macOS 15.8.3, Debian 12, Windows 11.
+
+**Two settings decide whether a pass means anything.** Both live in `~/.pi/agent/settings.json`:
+
+```json
+{
+  "quietStartup": true,
+  "defaultProvider": "codemaker",
+  "defaultModel": "deepseek-v4-flash"
+}
+```
+
+- **`quietStartup: true` is not cosmetic.** Without it `pi-acp` emits pi's startup banner — the pi
+  version plus a line per installed skill — as the first turn's text. On this machine that was 27
+  `SKILL.md` paths. A cell graded on "did text arrive" therefore PASSES while quoting paths nobody
+  asked for; the matrix only noticed once the answer was read rather than counted.
+- **`defaultProvider` and `defaultModel` are separate fields.** `defaultModel` is a bare model id,
+  not `provider/model`. Writing `"defaultModel": "codemaker/deepseek-v4-flash"` leaves the ACP
+  `model` configOption at the bundled default (`anthropic/claude-opus-5-5`), so on a machine with
+  no Anthropic credential every cell dies in four seconds with no text and no tool call — while
+  `pi -p … --model codemaker/deepseek-v4-flash` on the same box works, which makes it look like an
+  adapter bug.
+
+The provider itself is an ordinary OpenAI-compatible entry in `~/.pi/agent/models.json`:
+
+```json
+{
+  "$schema": "https://pi.dev/schemas/models.schema.json",
+  "providers": {
+    "codemaker": {
+      "baseUrl": "http://<gateway>/v1",
+      "api": "openai-completions",
+      "apiKey": "<key>",
+      "models": [{ "id": "deepseek-v4-flash" }]
+    }
+  }
+}
+```
+
+⚠️ `pi` writes its own sessions under `~/.pi/agent/sessions/`; archive them after a real-agent run
+the way dsh's are archived.
+
 ### 2.6 `gemini --acp` (gemini-cli) — works everywhere, but ONLY with a settings file
 
 ★ **`gemini --acp` passes on all three platforms once `~/.gemini/settings.json` is in place.**

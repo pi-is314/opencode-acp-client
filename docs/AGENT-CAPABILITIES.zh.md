@@ -130,6 +130,55 @@ Linux 上它同样需要 `~/.gemini/antigravity-cli/settings.json`（`modelProvi
 （`/v1/models` 与 `/antigravity` 都应答）。⚠️ 探错端口时 `/antigravity` 返回 404 而 `/v1/models`
 仍返回 200，看起来像「这代理没有 antigravity」，其实只是端口不对。
 
+### 2.7 `pi-acp`（pi coding agent）—— 三个平台全过
+
+`pi-acp`（0.0.35）是 `pi`（`@earendil-works/pi-coding-agent`，1.6.1）的 ACP 适配器：它拉起
+`pi --mode rpc`，在两者之间转发请求与事件。它声明 `loadSession: true`、
+`promptCapabilities.image`、`sessionCapabilities {list, delete}`，会话通过
+`~/.pi/pi-acp/session-map.json` 重挂。
+
+用 `pnpm e2e:matrix --agents pi` 实测 —— **5 个 TUI 构建 × 3 平台，15/15 全 PASS**，每个细胞都
+报出真实目录 `codemaker/deepseek-v4-flash`（走内网代理），3 轮对话、历史完整：
+macOS 15.8.3、Debian 12、Windows 11。
+
+**有两个设置决定这个“通过”有没有意义。** 都在 `~/.pi/agent/settings.json`：
+
+```json
+{
+  "quietStartup": true,
+  "defaultProvider": "codemaker",
+  "defaultModel": "deepseek-v4-flash"
+}
+```
+
+- **`quietStartup: true` 不是美化项。** 没有它，`pi-acp` 会把 pi 的启动横幅 —— 版本号加上每个
+  已装 skill 一行 —— 当成第一轮的文本发出来。在这台机器上是 **27 条 `SKILL.md` 路径**。于是
+  一个只看“有没有文本”的细胞会 **PASS**，同时引用了一堆没人问的路径；矩阵是**读了答案而不是
+  数了答案**之后才发现的。
+- **`defaultProvider` 和 `defaultModel` 是两个字段。** `defaultModel` 是裸模型 id，不是
+  `provider/model`。写成 `"defaultModel": "codemaker/deepseek-v4-flash"` 时，ACP 的 `model`
+  configOption 仍停在内置默认值（`anthropic/claude-opus-5-5`），于是在没有 Anthropic 凭据的
+  机器上每个细胞都四秒内失败、既无文本也无工具调用 —— 而同一台机器上
+  `pi -p … --model codemaker/deepseek-v4-flash` 却是通的，这会让它看起来像适配器的 bug。
+
+provider 本身就是 `~/.pi/agent/models.json` 里一条普通的 OpenAI 兼容项：
+
+```json
+{
+  "$schema": "https://pi.dev/schemas/models.schema.json",
+  "providers": {
+    "codemaker": {
+      "baseUrl": "http://<gateway>/v1",
+      "api": "openai-completions",
+      "apiKey": "<key>",
+      "models": [{ "id": "deepseek-v4-flash" }]
+    }
+  }
+}
+```
+
+⚠️ `pi` 把自己的会话写在 `~/.pi/agent/sessions/` 下；跑完真实 agent 测试后，按 dsh 的方式归档。
+
 ### 2.6 `gemini --acp`（gemini-cli）：能跑，但**必须有 settings 文件**
 
 ★ **只要 `~/.gemini/settings.json` 就位，`gemini --acp` 在三个平台上全过。**

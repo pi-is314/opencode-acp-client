@@ -432,6 +432,11 @@ for (const tui of tuis) {
   // version that cannot serve ACP reports as its own cell instead of poisoning the list.
   const agentsForRow = [
     { id: 'opencode', command: [tui.bin, 'acp'] },
+    // pi + pi-acp: spawns `pi --mode rpc` and bridges it to ACP. Two settings in
+    // `~/.pi/agent/settings.json` decide whether a cell means anything — `quietStartup: true`
+    // (otherwise the first turn's text is pi's startup banner, not the model's answer) and
+    // `defaultProvider`/`defaultModel` as separate fields (see docs/AGENT-CAPABILITIES.md §2.7).
+    { id: 'pi', command: ['pi-acp'] },
     ...agents,
   ];
   for (const agent of agentsForRow) {
