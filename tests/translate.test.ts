@@ -674,3 +674,45 @@ describe('a delegated agent must be recognisable as one', () => {
     expect(nameFor({ name: 'exec_command', title: 'grep subagent logs', kind: 'read' })).toBe('exec_command');
   });
 });
+
+describe('non-turn session updates do not start a turn', () => {
+  it('leaves the session idle and avoids phantom assistant messages when metadata updates arrive without an active turn', () => {
+    const { translator, record, events, types } = harness();
+
+    translator.apply(record, { sessionUpdate: 'usage_update', used: 420, size: 100_000 });
+    translator.apply(record, { sessionUpdate: 'session_info_update', title: 'Resumed title' });
+    translator.apply(record, { sessionUpdate: 'plan', entries: [{ content: 'step', status: 'pending' }] });
+    translator.apply(record, { sessionUpdate: 'current_mode_update', currentModeId: 'code' });
+    translator.apply(record, { sessionUpdate: 'available_commands_update', availableCommands: [] });
+    translator.apply(record, { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'echo' } });
+    translator.apply(record, { sessionUpdate: 'vendor_custom_event' } as never);
+
+    expect(record.busy).toBe(false);
+    expect(record.messages).toHaveLength(0);
+    expect(types()).not.toContain('turn.wait');
+    expect(types()).not.toContain('session.status');
+    expect(types()).not.toContain('message.updated');
+    expect(types()).not.toContain('session.execution.started');
+
+    // Usage and title updates still apply cleanly outside a turn.
+    expect(types()).toContain('session.usage.updated');
+    expect(translator.contextWindowFor(record.session.id)).toBe(100_000);
+    expect(record.session.title).toBe('Resumed title');
+    expect(types()).toContain('session.renamed');
+    expect(types()).toContain('session.updated');
+  });
+
+  it('still lazily starts a turn for assistant output updates without an explicit beginTurn', () => {
+    for (const update of [
+      { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hello' } },
+      { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'thinking' } },
+      { sessionUpdate: 'tool_call', toolCallId: 'c1', title: 'bash', status: 'in_progress' },
+    ] as const) {
+      const { translator, record, types } = harness();
+      translator.apply(record, update);
+      expect(record.busy).toBe(true);
+      expect(record.messages).toHaveLength(1);
+      expect(types()).toContain('session.execution.started');
+    }
+  });
+});

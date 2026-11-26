@@ -355,6 +355,23 @@ export class AcpClient extends EventEmitter<AcpEvents> {
     return id ? (this.catalogs.get(id)?.configOptions ?? []) : [];
   }
 
+  /** First non-empty config option list on this connection (fallback when a restored session omitted its own). */
+  anyConfigOptions(): SessionConfigOption[] {
+    for (const state of this.catalogs.values()) {
+      if (state.configOptions.length > 0) return state.configOptions;
+    }
+    return [];
+  }
+
+  private anyStandardModels():
+    | { currentModelId?: string; availableModels?: Array<{ modelId?: string; name?: string }> }
+    | undefined {
+    for (const state of this.catalogs.values()) {
+      if (state.standardModels) return state.standardModels;
+    }
+    return undefined;
+  }
+
   /** Any session on this connection advertised a catalog (pool-aware). */
   hasCatalog(): boolean {
     for (const state of this.catalogs.values()) {
@@ -421,6 +438,7 @@ export class AcpClient extends EventEmitter<AcpEvents> {
       return id !== '' && !existing.has(id) && !existing.has(id.replace(/\[[^\]]*\]$/, ''));
     });
     if (novel.length === 0) return;
+    const currentId = models?.currentModelId ?? novel[0]?.modelId ?? '';
     state.configOptions = [
       ...state.configOptions,
       {
@@ -428,7 +446,7 @@ export class AcpClient extends EventEmitter<AcpEvents> {
         name: 'Model',
         category: 'model',
         type: 'select',
-        currentValue: JSON.stringify([models?.currentModelId ?? novel[0]?.modelId ?? '', '']),
+        currentValue: JSON.stringify([currentId, currentId]),
         options: novel.map((model) => ({
           value: JSON.stringify([model.modelId ?? '', model.modelId ?? '']),
           name: model.name ?? String(model.modelId ?? ''),
@@ -577,7 +595,8 @@ export class AcpClient extends EventEmitter<AcpEvents> {
     // `session/set_model` (that is the family gemini and kimi use too), not by writing
     // a config option we synthesised on its behalf.
     const state = this.catalog(sessionId);
-    if (configId === 'model' && state.standardModels) {
+    const standard = state.standardModels ?? this.anyStandardModels();
+    if (configId === 'model' && standard) {
       let modelId = value;
       try {
         const parsed = JSON.parse(value) as unknown;
@@ -594,7 +613,7 @@ export class AcpClient extends EventEmitter<AcpEvents> {
       // The caller has the bare id (that is what the picker shows), so resolve it
       // against the standard list before switching — matching on the part before
       // `[`, which is the model's identity on both sides.
-      const wanted = this.resolveStandardModelId(state, modelId) ?? modelId;
+      const wanted = this.resolveStandardModelId({ standardModels: standard }, modelId) ?? modelId;
       await this.request('session/set_model', { sessionId, modelId: wanted });
       if (state.standardModels) state.standardModels.currentModelId = wanted;
       return state.configOptions;

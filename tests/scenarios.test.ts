@@ -4517,3 +4517,311 @@ describe('restored from main while resolving the Windows merge', () => {
     expect(logs.join('\n')).not.toMatch(/\[fake\] set effort=/);
   })
 });
+
+describe('startup /api/model race and fallback catalog', () => {
+  it('awaits an in-flight ensureAgent(focused) when session/load is still running', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oac-inflight-model-'));
+    const mapPath = join(dir, 'sessions.json');
+    const previous = process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
+    process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = mapPath;
+    try {
+      const env = {
+        OPENCODE_ACP_CLIENT_SESSION_MAP: mapPath,
+        FAKE_ACP_MODELS: '1',
+        FAKE_ACP_CAPS_LOAD_SESSION: '1',
+        FAKE_ACP_DELAY_SESSION_LOAD_MS: '300',
+      };
+      const first = await start('rich-turn', env);
+      const warmup = await createSession(first);
+      await runTurn(first, warmup);
+      const session = await createSession(first);
+      await runTurn(first, session);
+
+      const second = await startLaunched('rich-turn', env);
+      await fetch(`${second}/api/session/${session}`);
+      // Kick off ensureAgent(focused); with the pooled connection warm from waitForCatalog(),
+      // agents.set runs synchronously while session/load takes 300ms.
+      const msgReq = fetch(`${second}/api/session/${session}/message`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const modelRes = (await (await fetch(`${second}/api/model`)).json()) as {
+        data: Array<{ providerID?: string; id?: string }>;
+      };
+      await msgReq;
+      expect(modelRes.data.some((m) => m.providerID === 'fake' && m.id !== 'default')).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
+      else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
+      deferredRemovals.push(dir);
+    }
+  });
+
+  it('falls back to the same agent warmed catalog when session/load omits models, and still switches models', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oac-load-nomodels-'));
+    const mapPath = join(dir, 'sessions.json');
+    const previous = process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
+    process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = mapPath;
+    try {
+      const baseEnv = {
+        OPENCODE_ACP_CLIENT_SESSION_MAP: mapPath,
+        FAKE_ACP_MODELS: '1',
+        FAKE_ACP_CAPS_LOAD_SESSION: '1',
+      };
+      const first = await start('rich-turn', baseEnv);
+      const warmup = await createSession(first);
+      await runTurn(first, warmup);
+      const session = await createSession(first);
+      await runTurn(first, session);
+
+      const second = await startLaunched('rich-turn', {
+        ...baseEnv,
+        FAKE_ACP_LOAD_NO_MODELS: '1',
+        FAKE_ACP_DELAY_SESSION_LOAD_MS: '300',
+      });
+      await fetch(`${second}/api/session/${session}`);
+      const msgReq = fetch(`${second}/api/session/${session}/message`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const duringLoad = (await (await fetch(`${second}/api/model`)).json()) as {
+        data: Array<{ providerID?: string; id?: string }>;
+      };
+      await msgReq;
+      const afterLoad = (await (await fetch(`${second}/api/model`)).json()) as {
+        data: Array<{ providerID?: string; id?: string }>;
+      };
+      const switched = await fetch(`${second}/api/session/${session}/model`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: { providerID: 'fake', modelID: 'model-2' } }),
+      });
+
+      expect(duringLoad.data.some((m) => m.providerID === 'fake' && m.id !== 'default')).toBe(true);
+      expect(afterLoad.data.some((m) => m.providerID === 'fake' && m.id !== 'default')).toBe(true);
+      expect(switched.status).toBeLessThan(400);
+    } finally {
+      if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
+      else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
+      deferredRemovals.push(dir);
+    }
+  });
+
+  it('emits model.updated when session/load returns configOptions in its RPC response', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oac-load-resp-models-'));
+    const mapPath = join(dir, 'sessions.json');
+    const previous = process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
+    process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = mapPath;
+    try {
+      const baseEnv = {
+        OPENCODE_ACP_CLIENT_SESSION_MAP: mapPath,
+        FAKE_ACP_MODELS: '1',
+        FAKE_ACP_CAPS_LOAD_SESSION: '1',
+      };
+      const first = await start('rich-turn', baseEnv);
+      const session = await createSession(first);
+      await runTurn(first, session);
+
+      const second = await start('rich-turn', {
+        ...baseEnv,
+        FAKE_ACP_LOAD_MODELS_IN_RESPONSE: '1',
+      });
+      await fetch(`${second}/api/session/${session}`);
+      const sse = await sseDuring(second, () => fetch(`${second}/api/session/${session}/message`));
+      expect(sse).toContain('model.updated');
+    } finally {
+      if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
+      else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
+      deferredRemovals.push(dir);
+    }
+  });
+
+  it('adopts a valid non-empty modelID from standardModels (models.availableModels)', async () => {
+    const url = await startLaunched('rich-turn', {
+      FAKE_ACP_MODELS: '',
+      FAKE_ACP_MODELS_FIELD: '1',
+    });
+    expect(logs.join('\n')).not.toMatch(/adopted model qwen-like-1\/(?:\n|$)/);
+    const session = await createSession(url);
+    await runTurn(url, session);
+
+    const catalog = (await (await fetch(`${url}/api/model`)).json()) as {
+      data: Array<{ id?: string; providerID?: string }>;
+    };
+    const items = await messages(url, session);
+    const assistant = items.find((item) => item.type === 'assistant') as
+      | { model?: { providerID?: string; id?: string } }
+      | undefined;
+    expect(assistant?.model).toEqual({ providerID: 'qwen-like-1', id: 'qwen-like-1' });
+    expect(
+      catalog.data.some(
+        (m) => m.providerID === assistant?.model?.providerID && m.id === assistant?.model?.id,
+      ),
+    ).toBe(true);
+  });
+
+  it('GET /api/command does not eagerly session/load adopted sessions when commands are already known', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oac-cmd-noload-'));
+    const mapPath = join(dir, 'sessions.json');
+    const previous = process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
+    process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = mapPath;
+    try {
+      const env = {
+        OPENCODE_ACP_CLIENT_SESSION_MAP: mapPath,
+        FAKE_ACP_COMMANDS: '1',
+        FAKE_ACP_CAPS_LOAD_SESSION: '1',
+      };
+      const first = await start('rich-turn', env);
+      const warmup = await createSession(first);
+      await runTurn(first, warmup);
+      const session = await createSession(first);
+      await runTurn(first, session);
+
+      const second = await startLaunched('rich-turn', env);
+      const before = logs.length;
+      await fetch(`${second}/api/session/${session}`);
+      const res = await fetch(`${second}/api/command?location[directory]=${encodeURIComponent(process.cwd())}`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { data: Array<{ name: string }> };
+      const names = body.data.map((c) => c.name);
+      expect(names).toContain('greet');
+      expect(names).toContain('status');
+      expect(logs.slice(before).join('\n')).not.toContain('asking the agent to load');
+    } finally {
+      if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
+      else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
+      deferredRemovals.push(dir);
+    }
+  });
+});
+
+describe('replayed historical tool calls', () => {
+  it('projects completed, unclosed, and failed single-frame replayed tool_calls without status running and timestamps reasoning', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oac-replay-tools-'));
+    const mapPath = join(dir, 'sessions.json');
+    const previous = process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
+    process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = mapPath;
+    try {
+      const baseEnv = {
+        OPENCODE_ACP_CLIENT_SESSION_MAP: mapPath,
+        FAKE_ACP_CAPS_LOAD_SESSION: '1',
+      };
+      const first = await start('rich-turn', baseEnv);
+      const warmup = await createSession(first);
+      await runTurn(first, warmup);
+      const session = await createSession(first);
+      await runTurn(first, session);
+
+      const second = await startLaunched('rich-turn', {
+        ...baseEnv,
+        FAKE_ACP_REPLAY_TOOLS: '1',
+      });
+      await fetch(`${second}/api/session/${session}`);
+      const items = await messages(second, session);
+      const assistant = items.find((item) => item.type === 'assistant') as
+        | { content?: Array<Record<string, unknown>> }
+        | undefined;
+      expect(assistant).toBeDefined();
+      const content = assistant!.content ?? [];
+
+      const tools = content.filter((part) => part.type === 'tool') as Array<{
+        id?: string;
+        state?: { status?: string; input?: unknown; content?: Array<{ text?: string }>; error?: unknown };
+        time?: { created?: unknown; completed?: unknown };
+      }>;
+      expect(tools).toHaveLength(3);
+      expect(tools.some((t) => t.state?.status === 'running')).toBe(false);
+
+      const done = tools.find((t) => t.id === 'rep-done');
+      expect(done?.state?.status).toBe('completed');
+      expect(done?.state?.content?.[0]?.text).toBe('replayed-tool-output');
+      expect(typeof done?.time?.completed).toBe('number');
+
+      const open = tools.find((t) => t.id === 'rep-open');
+      expect(open?.state?.status).toBe('completed');
+      expect(open?.state?.input).toEqual({});
+      expect(typeof open?.time?.completed).toBe('number');
+
+      const fail = tools.find((t) => t.id === 'rep-fail');
+      expect(fail?.state?.status).toBe('error');
+      expect(fail?.state?.error).toEqual({ type: 'tool', message: 'boom' });
+      expect(typeof fail?.time?.completed).toBe('number');
+
+      const reasoning = content.find((part) => part.type === 'reasoning') as
+        | { time?: { created?: unknown; completed?: unknown } }
+        | undefined;
+      expect(reasoning?.time).toEqual({
+        created: expect.any(Number),
+        completed: expect.any(Number),
+      });
+    } finally {
+      if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
+      else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
+      deferredRemovals.push(dir);
+    }
+  });
+});
+
+describe('post-load session metadata updates', () => {
+  it('applies usage and title updates sent after session/load without leaving the session busy', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oac-post-load-meta-'));
+    const mapPath = join(dir, 'sessions.json');
+    const previous = process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
+    process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = mapPath;
+    try {
+      const baseEnv = {
+        OPENCODE_ACP_CLIENT_SESSION_MAP: mapPath,
+        FAKE_ACP_CAPS_LOAD_SESSION: '1',
+      };
+      const first = await start('rich-turn', baseEnv);
+      const warmup = await createSession(first);
+      await runTurn(first, warmup);
+      const session = await createSession(first);
+      await runTurn(first, session);
+
+      const second = await startLaunched('rich-turn', {
+        ...baseEnv,
+        FAKE_ACP_REPLAY_TOOLS: '1',
+        FAKE_ACP_POST_LOAD_META: '1',
+      });
+
+      const stream = await sseDuring(second, async () => {
+        await fetch(`${second}/api/session/${session}`);
+        await messages(second, session);
+      });
+
+      const events = stream
+        .split('\n')
+        .filter((line) => line.startsWith('data: '))
+        .map((line) => JSON.parse(line.slice(6)) as { type: string; data: Record<string, unknown> });
+
+      const active = (await (await fetch(`${second}/api/session/active`)).json()) as {
+        data: Record<string, unknown>;
+      };
+      expect(active.data).toEqual({});
+
+      expect(events.some((event) => event.type === 'session.usage.updated')).toBe(true);
+      expect(
+        events.some(
+          (event) => event.type === 'session.renamed' && event.data['title'] === 'Today News',
+        ),
+      ).toBe(true);
+      expect(events.some((event) => event.type === 'session.execution.started')).toBe(false);
+      expect(events.some((event) => event.type === 'turn.wait')).toBe(false);
+      expect(
+        events.some(
+          (event) => event.type === 'session.status' && event.data['status'] === 'busy',
+        ),
+      ).toBe(false);
+
+      const items = await messages(second, session);
+      expect(items).toHaveLength(2);
+      const assistant = items.find((item) => item.type === 'assistant') as
+        | { time?: { completed?: unknown } }
+        | undefined;
+      expect(typeof assistant?.time?.completed).toBe('number');
+    } finally {
+      if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
+      else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
+      deferredRemovals.push(dir);
+    }
+  });
+});

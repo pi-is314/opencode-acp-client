@@ -11,6 +11,7 @@
  * untouched.
  */
 import type { SessionUpdate } from './acp/types.js';
+import { toolError, toolOutput as extractToolOutput } from './translate/events.js';
 
 /** A tool call inside an assistant turn. */
 export interface HistoryTool {
@@ -19,6 +20,8 @@ export interface HistoryTool {
   input: unknown;
   output?: string;
   completed: boolean;
+  failed?: boolean;
+  error?: string;
   created: number;
 }
 
@@ -32,6 +35,8 @@ export type HistoryPart =
       name: string;
       input: unknown;
       completed: boolean;
+      failed?: boolean;
+      error?: string;
       output?: string;
       created: number;
     };
@@ -74,18 +79,18 @@ export function chunkText(update: SessionUpdate): string {
   return '';
 }
 
-/** A tool result arrives as content blocks; keep their text. */
-function toolOutput(update: SessionUpdate): string | undefined {
-  const content = update['content'];
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return undefined;
-  const text = content
-    .map((block) => {
-      const b = block as { type?: string; text?: string };
-      return typeof b.text === 'string' ? b.text : '';
-    })
-    .join('');
-  return text || undefined;
+/** Extract tool output from string content, nested ACP content blocks, or rawOutput. */
+function replayToolOutput(update: SessionUpdate): string | undefined {
+  if (typeof update['content'] === 'string') return update['content'] || undefined;
+  return extractToolOutput(update);
+}
+
+function isFailedStatus(status: unknown): boolean {
+  return status === 'failed' || status === 'error' || status === 'cancelled' || status === 'canceled';
+}
+
+function isCompletedStatus(status: unknown): boolean {
+  return status === 'completed';
 }
 
 export function historyFromReplay(updates: readonly SessionUpdate[]): HistoryEntry[] {
@@ -192,11 +197,19 @@ export function historyFromReplay(updates: readonly SessionUpdate[]): HistoryEnt
         if (!callId) break;
         const entry = assistantFor(now);
         const name = String(update['title'] ?? update['kind'] ?? 'tool');
+        const status = update['status'];
+        const failed = isFailedStatus(status);
+        const completed = failed || isCompletedStatus(status);
+        const output = replayToolOutput(update);
+        const error = failed ? (toolError(update) ?? output) : undefined;
         const tool: HistoryTool = {
           callId,
           name,
           input: update['rawInput'],
-          completed: false,
+          completed,
+          ...(output !== undefined ? { output } : {}),
+          ...(failed ? { failed: true } : {}),
+          ...(error !== undefined ? { error } : {}),
           created: now,
         };
         entry.tools ??= [];
@@ -212,9 +225,18 @@ export function historyFromReplay(updates: readonly SessionUpdate[]): HistoryEnt
         if (!callId) break;
         const tool = findTool(callId);
         if (!tool) break;
-        const output = toolOutput(update);
+        const output = replayToolOutput(update);
         if (output !== undefined) tool.output = output;
-        if (update['status'] === 'completed' || update['status'] === 'failed') tool.completed = true;
+        if (update['rawInput'] !== undefined) tool.input = update['rawInput'];
+        const status = update['status'];
+        if (isFailedStatus(status)) {
+          tool.completed = true;
+          tool.failed = true;
+          const err = toolError(update) ?? output;
+          if (err !== undefined) tool.error = err;
+        } else if (isCompletedStatus(status)) {
+          tool.completed = true;
+        }
         const title = update['title'];
         if (typeof title === 'string' && title) tool.name = title;
         // The ordered view carries its own copy of the tool.
@@ -224,8 +246,11 @@ export function historyFromReplay(updates: readonly SessionUpdate[]): HistoryEnt
           );
           if (part) {
             part.completed = tool.completed;
+            part.failed = tool.failed;
+            part.error = tool.error;
             part.output = tool.output;
             part.name = tool.name;
+            part.input = tool.input;
           }
         }
         break;
@@ -235,6 +260,17 @@ export function historyFromReplay(updates: readonly SessionUpdate[]): HistoryEnt
         // the context meter from the backend's own store. Anything else is
         // presentation the client does not need yet.
         break;
+    }
+  }
+
+  // A replay is historical: no live turn is running and no future tool_call_update will arrive,
+  // so any tool call left open must settle as completed rather than spinning forever in the UI.
+  for (const entry of entries) {
+    for (const tool of entry.tools ?? []) {
+      if (!tool.completed) tool.completed = true;
+    }
+    for (const part of entry.parts ?? []) {
+      if (part.kind === 'tool' && !part.completed) part.completed = true;
     }
   }
 

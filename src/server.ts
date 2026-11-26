@@ -989,14 +989,19 @@ export class BridgeServer {
       // opencode's, and every pick was rejected by the agent. The focus comes from the reads
       // the client makes on a tab switch; see `noteFocus`.
       const focused = this.focusRecord();
-      const pending = focused && !this.agents.has(focused.session.id)
-        ? focused
-        : this.state.all().find((candidate) => !this.agents.has(candidate.session.id));
-      if (pending && this.modelCatalog(focused).models.every((m) => !this.isRealModel(m))) {
-        try {
-          await this.ensureAgent(pending);
-        } catch (err) {
-          this.log(`[bridge] could not resolve the model catalog: ${String(err)}`);
+      if (this.modelCatalog(focused).models.every((m) => !this.isRealModel(m))) {
+        const needsStart = (candidate: SessionRecord): boolean =>
+          !this.agents.has(candidate.session.id) || this.pendingAgents.has(candidate.session.id);
+        const pending =
+          focused && needsStart(focused)
+            ? focused
+            : this.state.all().find(needsStart);
+        if (pending) {
+          try {
+            await this.ensureAgent(pending);
+          } catch (err) {
+            this.log(`[bridge] could not resolve the model catalog: ${String(err)}`);
+          }
         }
       }
       const models = this.modelCatalog(focused).models;
@@ -1139,21 +1144,24 @@ export class BridgeServer {
       const records = this.state
         .all()
         .filter((candidate) => (candidate.directory ?? this.options.directory) === directory);
-      for (const candidate of records) {
-        if (candidate.commands) continue; // already reported
-        // The session may never have started (lazy, no prompt yet) — start it; the
-        // agent reports its commands over ACP as part of coming up.
+      if (records.length > 0 && !records.some((candidate) => candidate.commands)) {
+        // Only start one session to discover the agent's commands — starting every remembered
+        // session in the directory would replay dozens of historical sessions and race `/api/model`.
+        const starter =
+          records.find((candidate) => this.agents.has(candidate.session.id)) ??
+          records.find((candidate) => !candidate.acpSessionId) ??
+          records[0]!;
         try {
-          await this.ensureAgent(candidate);
+          await this.ensureAgent(starter);
         } catch (err) {
           this.log(`[bridge] could not start the agent for its commands: ${String(err)}`);
         }
-      }
-      // The agent sends `available_commands_update` right after `session/new` answers,
-      // which can still be in flight when ensureAgent resolves. Give it a moment.
-      const deadline = Date.now() + 2000;
-      while (Date.now() < deadline && records.some((candidate) => !candidate.commands)) {
-        await delay(100);
+        // The agent sends `available_commands_update` right after `session/new` answers,
+        // which can still be in flight when ensureAgent resolves. Give it a moment.
+        const deadline = Date.now() + 2000;
+        while (Date.now() < deadline && !records.some((candidate) => candidate.commands)) {
+          await delay(100);
+        }
       }
       const seen = new Set<string>();
       const commands: Array<{ name: string; description?: string }> = [];
@@ -2398,7 +2406,9 @@ export class BridgeServer {
         // which the desktop shows as "request failed / unknown error" and leaves the
         // session on the old model (with the picker claiming the new one).
         const advertised: string[] = [];
-        for (const option of agent.configOptionsFor(record.acpSessionId)) {
+        const sessionOptions = agent.configOptionsFor(record.acpSessionId);
+        const switchOptions = sessionOptions.length > 0 ? sessionOptions : agent.anyConfigOptions();
+        for (const option of switchOptions) {
           const optionId = option.id ?? option.configId;
           if (option.category !== 'model' && optionId !== 'model') continue;
           for (const entry of option.options ?? []) {
@@ -2886,7 +2896,9 @@ export class BridgeServer {
     variant: string | undefined,
   ): Promise<void> {
     if (!variant) return;
-    const option = agent.configOptionsFor(record.acpSessionId).find(isEffortOption);
+    const sessionOptions = agent.configOptionsFor(record.acpSessionId);
+    const effortOptions = sessionOptions.length > 0 ? sessionOptions : agent.anyConfigOptions();
+    const option = effortOptions.find(isEffortOption);
     if (!option) {
       this.log(`[bridge] /model: variant '${variant}' asked for, but this agent has no effort option`);
       return;
@@ -3998,6 +4010,28 @@ export class BridgeServer {
    * actually reads for this — `session.model.selected`, which writes
    * `session.info[id].model` (the composer and the context meter read that).
    */
+  private emitModelUpdated(record: SessionRecord): void {
+    const directory = record.directory ?? this.location.directory;
+    this.hub.emit({
+      type: EVENT.modelUpdated,
+      data: {},
+      // The session's own directory, not the bridge's launch one: the client
+      // keys the catalog by this event's location, and `local.model.available()`
+      // looks the selection up under the SESSION's directory. The two differ
+      // after a /cd or when the map stores the physical path (on macOS
+      // /private/var vs /var) — with the launch location here, the refreshed
+      // catalog landed under a key nothing reads and the composer stayed locked.
+      location: {
+        directory,
+        project: {
+          id: projectIdFor(directory),
+          directory,
+          canonical: directory,
+        },
+      },
+    });
+  }
+
   private applyConfigOptionUpdate(record: SessionRecord, agent: AcpClient, update: SessionUpdate): void {
     const options = Array.isArray(update['configOptions'])
       ? (update['configOptions'] as SessionConfigOption[])
@@ -4007,6 +4041,14 @@ export class BridgeServer {
       return;
     }
     agent.applyConfigOptions(record.acpSessionId ?? record.session.id, options);
+    if (
+      options.some(
+        (option) =>
+          option.category === 'model' || (option.id ?? option.configId) === 'model' || isEffortOption(option),
+      )
+    ) {
+      this.emitModelUpdated(record);
+    }
 
     const model = modelFromConfigOptions(options);
     // What the session was using a moment ago. A session created before the agent reported its
@@ -4180,8 +4222,18 @@ export class BridgeServer {
     // whichever session touched its connection last.
     const live: Array<{ record: SessionRecord; agent: AcpClient }> = only
       ? (() => {
-          const agent = this.agents.get(only.session.id);
-          return agent ? [{ record: only, agent }] : [];
+          const sameAgent = (candidate: SessionRecord): boolean =>
+            agentBindingLabel(candidate.agent ?? this.agentBinding()) ===
+            agentBindingLabel(only.agent ?? this.agentBinding());
+          const ordered: Array<{ record: SessionRecord; agent: AcpClient }> = [];
+          const onlyAgent = this.agents.get(only.session.id);
+          if (onlyAgent) ordered.push({ record: only, agent: onlyAgent });
+          for (const candidate of this.state.all()) {
+            if (candidate.session.id === only.session.id || !sameAgent(candidate)) continue;
+            const candidateAgent = this.agents.get(candidate.session.id);
+            if (candidateAgent) ordered.push({ record: candidate, agent: candidateAgent });
+          }
+          return ordered;
         })()
       : this.state
           .all()
@@ -4596,6 +4648,7 @@ export class BridgeServer {
             const loadTranslator = this.translators.get(record.session.id);
             loadTranslator?.mute();
             let collecting = true;
+            let emittedModelUpdate = false;
             agent.on('update', (sessionId, update) => {
               if (!collecting || sessionId !== record.acpSessionId) return;
               // A replay carries configuration too, and that is not transcript content. Capturing
@@ -4610,24 +4663,8 @@ export class BridgeServer {
                 // only the placeholder; nothing else would tell it to look again. The
                 // replayed config IS a catalog change — say so, or every model stays
                 // `(unavailable)` and the composer stays locked on the restored session.
-                this.hub.emit({
-                  type: EVENT.modelUpdated,
-                  data: {},
-                  // The session's own directory, not the bridge's launch one: the client
-                  // keys the catalog by this event's location, and `local.model.available()`
-                  // looks the selection up under the SESSION's directory. The two differ
-                  // after a /cd or when the map stores the physical path (on macOS
-                  // /private/var vs /var) — with the launch location here, the refreshed
-                  // catalog landed under a key nothing reads and the composer stayed locked.
-                  location: {
-                    directory: record.directory ?? this.location.directory,
-                    project: {
-                      id: projectIdFor(record.directory ?? this.location.directory),
-                      directory: record.directory ?? this.location.directory,
-                      canonical: record.directory ?? this.location.directory,
-                    },
-                  },
-                });
+                this.emitModelUpdated(record);
+                emittedModelUpdate = true;
                 // The session's own model has to move with it. `session.step.started` carries
                 // `model: record.model ? {...} : undefined`, and the client inserts the assistant
                 // row from that event before dereferencing `message.model.providerID` in its
@@ -4650,8 +4687,13 @@ export class BridgeServer {
               // The response carries the session's own config options; agents that
               // report them only here (not as a `config_option_update` notification)
               // otherwise leave the record on the catalog default.
-              const loadedModel = modelFromConfigOptions(agent.configOptionsFor(wanted));
+              const loadedOptions = agent.configOptionsFor(wanted);
+              const loadedModel = modelFromConfigOptions(loadedOptions);
               if (loadedModel) record.model = loadedModel;
+              if (!emittedModelUpdate && loadedOptions.length > 0) {
+                this.emitModelUpdated(record);
+                emittedModelUpdate = true;
+              }
               this.rememberPairing(record.session.id, wanted, directory, false, record.agent ?? this.agentBinding());
             } catch (firstErr) {
               // Measured with dsh: a load that arrives moments after the agent's
@@ -4666,6 +4708,13 @@ export class BridgeServer {
               try {
                 await agent.loadSession(wanted, (record.directory ?? this.options.directory));
                 this.log(`[bridge] history: load answered on retry, ${replay.length} replayed updates`);
+                const loadedOptions = agent.configOptionsFor(wanted);
+                const loadedModel = modelFromConfigOptions(loadedOptions);
+                if (loadedModel) record.model = loadedModel;
+                if (!emittedModelUpdate && loadedOptions.length > 0) {
+                  this.emitModelUpdated(record);
+                  emittedModelUpdate = true;
+                }
                 this.rememberPairing(record.session.id, wanted, directory, false, record.agent ?? this.agentBinding());
               } catch (err) {
                 // Measured, twice: an agent that advertises loadSession and then
@@ -4697,6 +4746,10 @@ export class BridgeServer {
                 record.session.acpSessionId = fresh.sessionId;
                 this.log(`[bridge] new agent session ${fresh.sessionId} under '${record.session.id}'`);
                 this.rememberPairing(record.session.id, fresh.sessionId, directory, true, record.agent ?? this.agentBinding());
+                if (agent.configOptionsFor(fresh.sessionId).length > 0) {
+                  this.adoptCatalogModels();
+                  this.emitModelUpdated(record);
+                }
               }
             } finally {
               collecting = false;
@@ -4753,22 +4806,7 @@ export class BridgeServer {
               // and a resumed session therefore had a right card and a wrong footer. Measured on
               // `dsh --profile acp`: the resume response carries 2 config options (49 models) while
               // `/api/model` had answered with the placeholder one moment earlier.
-              const resumeDirectory = record.directory ?? this.location.directory;
-              this.hub.emit({
-                type: EVENT.modelUpdated,
-                data: {},
-                // The SESSION's own directory, exactly as the `session/load` path does: the client
-                // keys the catalog by this event's location, and a key nothing reads leaves the
-                // composer locked on the restored session.
-                location: {
-                  directory: resumeDirectory,
-                  project: {
-                    id: projectIdFor(resumeDirectory),
-                    directory: resumeDirectory,
-                    canonical: resumeDirectory,
-                  },
-                },
-              });
+              this.emitModelUpdated(record);
               this.log(
                 `[bridge] resumed '${wanted}' without replay (session/resume carries no history); whether the ` +
                   `model still has the earlier conversation is up to the agent — measured both ways on the same profile`,
@@ -4814,6 +4852,10 @@ export class BridgeServer {
               record.session.acpSessionId = fresh.sessionId;
               this.log(`[bridge] new agent session ${fresh.sessionId} under '${record.session.id}'`);
               this.rememberPairing(record.session.id, fresh.sessionId, directory, true, record.agent ?? this.agentBinding());
+              if (agent.configOptionsFor(fresh.sessionId).length > 0) {
+                this.adoptCatalogModels();
+                this.emitModelUpdated(record);
+              }
             }
             void this.applyBackendTitle(record, agent);
             return { agent, sessionId: record.acpSessionId ?? wanted };
@@ -4839,6 +4881,10 @@ export class BridgeServer {
           record.session.acpSessionId = rescued.sessionId;
           this.log(`[bridge] new agent session ${rescued.sessionId} under '${record.session.id}'`);
           this.rememberPairing(record.session.id, rescued.sessionId, directory, true, record.agent ?? this.agentBinding());
+          if (agent.configOptionsFor(rescued.sessionId).length > 0) {
+            this.adoptCatalogModels();
+            this.emitModelUpdated(record);
+          }
           return { agent, sessionId: rescued.sessionId };
         }
         const session = await agent.newSession((record.directory ?? this.options.directory));
@@ -4864,6 +4910,10 @@ export class BridgeServer {
         // The prompt path's `?? attachTranslator` stays idempotent; the load branch above
         // keeps its own replay collector and is deliberately not doubled.
         this.attachTranslator(record, agent);
+        if (agent.configOptionsFor(session.sessionId).length > 0) {
+          this.adoptCatalogModels();
+          this.emitModelUpdated(record);
+        }
       }
       return { agent, sessionId: record.acpSessionId ?? record.session.id };
     })();
@@ -5127,27 +5177,57 @@ function toSessionMessage(
     ? { id: chosen.modelID, providerID: chosen.providerID }
     : { id: 'unknown', providerID: PLACEHOLDER_BACKEND };
   const content: Array<Record<string, unknown>> = [];
-  const toolPart = (tool: { callId: string; name: string; input: unknown; completed: boolean; output?: string; created: number }) => ({
-    // `state` is a discriminated union: a finished call carries its output as
-    // content, one still running carries none.
-    type: 'tool',
-    id: tool.callId,
-    name: tool.name,
-    executed: true,
-    state: tool.completed
-      ? {
-          status: 'completed',
-          input: tool.input,
-          content: [{ type: 'text', text: tool.output ?? '' }],
-          metadata: {},
-        }
-      : { status: 'running', input: tool.input, metadata: {} },
-    time: {
-      created: tool.created,
-      ran: tool.created,
-      ...(tool.completed ? { completed: tool.created } : {}),
-    },
-  });
+  const toolPart = (tool: {
+    callId: string;
+    name: string;
+    input: unknown;
+    completed: boolean;
+    failed?: boolean;
+    error?: string;
+    output?: string;
+    created: number;
+  }) => {
+    const input =
+      tool.input && typeof tool.input === 'object' && !Array.isArray(tool.input)
+        ? (tool.input as Record<string, unknown>)
+        : {};
+    let state: Record<string, unknown>;
+    if (tool.failed) {
+      const message = tool.error ?? tool.output ?? 'tool failed';
+      state = {
+        status: 'error',
+        input,
+        error: { type: 'tool', message },
+        ...(tool.output === undefined || tool.output === message
+          ? {}
+          : { content: [{ type: 'text', text: tool.output }] }),
+        metadata: {},
+      };
+    } else if (tool.completed) {
+      state = {
+        status: 'completed',
+        input,
+        content: [{ type: 'text', text: tool.output ?? '' }],
+        metadata: {},
+      };
+    } else {
+      state = { status: 'running', input, metadata: {} };
+    }
+    return {
+      // `state` is a discriminated union: a finished call carries its output as
+      // content, one still running carries none.
+      type: 'tool',
+      id: tool.callId,
+      name: tool.name,
+      executed: true,
+      state,
+      time: {
+        created: tool.created,
+        ran: tool.created,
+        ...(tool.completed || tool.failed ? { completed: tool.created } : {}),
+      },
+    };
+  };
   const placed = new Set<string>();
   if (entry.parts && entry.parts.length > 0) {
     // The ordered view: text, tool, text, tool stays that way.
@@ -5157,7 +5237,11 @@ function toSessionMessage(
         continue;
       }
       if (part.kind === 'reasoning') {
-        content.push({ type: 'reasoning', text: part.text });
+        content.push({
+          type: 'reasoning',
+          text: part.text,
+          time: { created: entry.created, completed: entry.created },
+        });
         continue;
       }
       content.push(toolPart(part));
@@ -5500,7 +5584,7 @@ function modelFromConfigOptions(
     const value = option.currentValue;
     if (typeof value !== 'string' || !value) continue;
     const parsed = parseModelValue(value);
-    if (!parsed.providerID) continue;
+    if (!parsed.providerID || !parsed.modelID) continue;
     return { providerID: parsed.providerID, modelID: parsed.modelID };
   }
   return undefined;
