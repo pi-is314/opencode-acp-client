@@ -4105,6 +4105,210 @@ describe('--continue: the newest agent session imported before the TUI asks', ()
 
 describe('titled sessions discovered from stable ACP session/list', () => {
 ;
+  it('does not adopt a titled agent session the map has never paired', async () => {
+    // The list is still REQUESTED — a resumed session needs it to find its agent id — but
+    // nothing is adopted. See the `--continue` block above for why.
+    const url = await start('rich-turn', {
+      FAKE_ACP_CAPS_LIST_SESSIONS: '1',
+      FAKE_ACP_CAPS_LOAD_SESSION: '1',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const listed = (await (await fetch(`${url}/api/session`)).json()) as {
+      data: Array<{ id: string; title?: string; acpSessionId?: string }>;
+    };
+    // The title is the fixture's own: `session/list` offered it with that name, and the
+    // bridge used to adopt it under a `ses_acp_…` alias.
+    expect(listed.data.find((session) => session.title === 'Imported old conversation')).toBeUndefined();
+  });
+
+  it('preserves ACP session/list updatedAt on GET /api/session', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oac-list-time-'));
+    const mapPath = join(dir, 'sessions.json');
+    const previous = process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
+    const acpUpdatedAt = '2026-01-15T10:00:00Z';
+    writeFileSync(
+      mapPath,
+      JSON.stringify({
+        ses_old_listed: {
+          acpSessionId: 'listed-agent-session-1',
+          directory: process.cwd(),
+          title: 'Imported old conversation',
+          updatedAt: Date.parse('2026-01-10T08:00:00Z'),
+          createdAt: Date.parse('2026-01-09T08:00:00Z'),
+        },
+      }),
+      'utf8',
+    );
+    process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = mapPath;
+    try {
+      const url = await start('rich-turn', {
+        FAKE_ACP_CAPS_LIST_SESSIONS: '1',
+        FAKE_ACP_CAPS_LOAD_SESSION: '1',
+        FAKE_ACP_LIST_UPDATED_AT: acpUpdatedAt,
+      });
+      const listed = (await (await fetch(`${url}/api/session`)).json()) as {
+        data: Array<{ id: string; time: { created: number; updated: number } }>;
+      };
+      const row = listed.data.find((session) => session.id === 'ses_old_listed');
+      expect(row).toBeDefined();
+      expect(row!.time.updated).toBe(Date.parse(acpUpdatedAt));
+      expect(row!.time.created).toBe(Date.parse('2026-01-09T08:00:00Z'));
+    } finally {
+      if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
+      else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
+      deferredRemovals.push(dir);
+    }
+  });
+
+  it('falls back to SessionMap timestamps when ACP session/list omits or sends invalid updatedAt', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oac-list-fallback-time-'));
+    const mapPath = join(dir, 'sessions.json');
+    const previous = process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
+    const mapCreated = Date.parse('2026-02-01T09:00:00Z');
+    const mapUpdated = Date.parse('2026-02-03T14:30:00Z');
+    writeFileSync(
+      mapPath,
+      JSON.stringify({
+        ses_map_dated: {
+          acpSessionId: 'listed-agent-session-1',
+          directory: process.cwd(),
+          title: 'Imported old conversation',
+          createdAt: mapCreated,
+          updatedAt: mapUpdated,
+        },
+      }),
+      'utf8',
+    );
+    process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = mapPath;
+    try {
+      const urlInvalid = await start('rich-turn', {
+        FAKE_ACP_CAPS_LIST_SESSIONS: '1',
+        FAKE_ACP_CAPS_LOAD_SESSION: '1',
+        FAKE_ACP_LIST_UPDATED_AT: 'not-a-date',
+      });
+      const listedInvalid = (await (await fetch(`${urlInvalid}/api/session`)).json()) as {
+        data: Array<{ id: string; time: { created: number; updated: number } }>;
+      };
+      const rowInvalid = listedInvalid.data.find((session) => session.id === 'ses_map_dated');
+      expect(rowInvalid).toBeDefined();
+      expect(rowInvalid!.time.created).toBe(mapCreated);
+      expect(rowInvalid!.time.updated).toBe(mapUpdated);
+
+      const urlOmitted = await start('rich-turn', {
+        FAKE_ACP_CAPS_LIST_SESSIONS: '1',
+        FAKE_ACP_CAPS_LOAD_SESSION: '1',
+      });
+      const listedOmitted = (await (await fetch(`${urlOmitted}/api/session`)).json()) as {
+        data: Array<{ id: string; time: { created: number; updated: number } }>;
+      };
+      const rowOmitted = listedOmitted.data.find((session) => session.id === 'ses_map_dated');
+      expect(rowOmitted).toBeDefined();
+      expect(rowOmitted!.time.created).toBe(mapCreated);
+      expect(rowOmitted!.time.updated).toBe(mapUpdated);
+    } finally {
+      if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
+      else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
+      deferredRemovals.push(dir);
+    }
+  });
+
+  it('clamps created to updated when ACP updatedAt is earlier than SessionMap createdAt', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oac-list-clamp-time-'));
+    const mapPath = join(dir, 'sessions.json');
+    const previous = process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
+    const acpUpdatedAt = '2026-01-05T10:00:00Z';
+    writeFileSync(
+      mapPath,
+      JSON.stringify({
+        ses_clamped: {
+          acpSessionId: 'listed-agent-session-1',
+          directory: process.cwd(),
+          title: 'Imported old conversation',
+          createdAt: Date.parse('2026-02-01T09:00:00Z'),
+          updatedAt: Date.parse('2026-02-03T14:30:00Z'),
+        },
+      }),
+      'utf8',
+    );
+    process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = mapPath;
+    try {
+      const url = await start('rich-turn', {
+        FAKE_ACP_CAPS_LIST_SESSIONS: '1',
+        FAKE_ACP_CAPS_LOAD_SESSION: '1',
+        FAKE_ACP_LIST_UPDATED_AT: acpUpdatedAt,
+      });
+      const listed = (await (await fetch(`${url}/api/session`)).json()) as {
+        data: Array<{ id: string; time: { created: number; updated: number } }>;
+      };
+      const row = listed.data.find((session) => session.id === 'ses_clamped');
+      expect(row).toBeDefined();
+      expect(row!.time.updated).toBe(Date.parse(acpUpdatedAt));
+      expect(row!.time.created).toBe(Date.parse(acpUpdatedAt));
+    } finally {
+      if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
+      else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
+      deferredRemovals.push(dir);
+    }
+  });
+});
+
+describe('remembered session timestamps on adoption and resume', () => {
+  it('preserves SessionMap createdAt and updatedAt on GET /api/session/:id adoption and pre-created resume', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oac-adopt-time-'));
+    const mapPath = join(dir, 'sessions.json');
+    const previous = process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
+    const mapCreated = Date.parse('2026-03-01T10:00:00Z');
+    const mapUpdated = Date.parse('2026-03-05T16:00:00Z');
+    writeFileSync(
+      mapPath,
+      JSON.stringify({
+        ses_adopted_old: {
+          acpSessionId: 'agent-old-1',
+          directory: process.cwd(),
+          title: 'Old adopted chat',
+          agent: { command: process.execPath, args: [FAKE_AGENT] },
+          createdAt: mapCreated,
+          updatedAt: mapUpdated,
+        },
+      }),
+      'utf8',
+    );
+    process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = mapPath;
+    try {
+      const urlAdopt = await start('rich-turn');
+      const adopted = (await (await fetch(`${urlAdopt}/api/session/ses_adopted_old`)).json()) as {
+        data: { id: string; time: { created: number; updated: number } };
+      };
+      expect(adopted.data.id).toBe('ses_adopted_old');
+      expect(adopted.data.time.created).toBe(mapCreated);
+      expect(adopted.data.time.updated).toBe(mapUpdated);
+
+      const resumedServer = new BridgeServer({
+        command: process.execPath,
+        args: [FAKE_AGENT],
+        directory: process.cwd(),
+        port: 0,
+        env: { FAKE_ACP_SCENARIO: 'rich-turn', FAKE_ACP_MODELS: '1', FAKE_ACP_CAPS_RESUME: '1' },
+        resumeSession: 'agent-old-1',
+        resumeVisibleSessionId: 'ses_adopted_old',
+        onLog: (line) => logs.push(line),
+      });
+      servers.push(resumedServer);
+      const { host, port } = await resumedServer.listen();
+      const urlResume = `http://${host}:${port}`;
+      await fetch(`${urlResume}/api/session`);
+      const resumed = (await (await fetch(`${urlResume}/api/session/ses_adopted_old`)).json()) as {
+        data: { id: string; time: { created: number; updated: number } };
+      };
+      expect(resumed.data.id).toBe('ses_adopted_old');
+      expect(resumed.data.time.created).toBe(mapCreated);
+      expect(resumed.data.time.updated).toBe(mapUpdated);
+    } finally {
+      if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
+      else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
+      deferredRemovals.push(dir);
+    }
+  });
 });
 
 describe('the shell row in stored history', () => {

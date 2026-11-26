@@ -499,17 +499,20 @@ export class AcpClient extends EventEmitter<AcpEvents> {
    * page with a cursor. An unpaginated read only ever sees recent sessions — for a
    * directory whose sessions are all older, a "latest" lookup finds nothing.
    */
-  async listSessions(cwd: string, maxPages = 10): Promise<Array<{ sessionId: string; cwd: string; title?: string }>> {
+  async listSessions(
+    cwd: string,
+    maxPages = 10,
+  ): Promise<Array<{ sessionId: string; cwd: string; title?: string; updatedAt?: string | null }>> {
     // ACP: a client MUST NOT call `session/list` without `sessionCapabilities.list`.
     // Refusing here (rather than in each caller) keeps the gate in one place.
     if (!this.capabilities.listSessions) {
       throw new AcpMethodNotFound('session/list');
     }
-    const all: Array<{ sessionId: string; cwd: string; title?: string }> = [];
+    const all: Array<{ sessionId: string; cwd: string; title?: string; updatedAt?: string | null }> = [];
     let cursor: string | undefined;
     for (let page = 0; page < maxPages; page += 1) {
       const result = await this.request<{
-        sessions?: Array<{ sessionId: string; cwd: string; title?: string }>;
+        sessions?: Array<{ sessionId: string; cwd: string; title?: string; updatedAt?: string | null }>;
         nextCursor?: string | null;
       }>('session/list', cursor ? { cwd, cursor } : { cwd });
       all.push(...(result.sessions ?? []));
