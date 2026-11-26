@@ -4099,15 +4099,12 @@ describe('the session map file', () => {
   });
 });
 
-describe('--continue: the newest agent session imported before the TUI asks', () => {
-;
-});
 
 describe('titled sessions discovered from stable ACP session/list', () => {
-;
   it('does not adopt a titled agent session the map has never paired', async () => {
     // The list is still REQUESTED — a resumed session needs it to find its agent id — but
-    // nothing is adopted. See the `--continue` block above for why.
+    // nothing is adopted: every launch used to re-import the agent's own sessions as
+    // `ses_acp_…` ghosts, so a restore showed tabs nobody opened.
     const url = await start('rich-turn', {
       FAKE_ACP_CAPS_LIST_SESSIONS: '1',
       FAKE_ACP_CAPS_LOAD_SESSION: '1',
