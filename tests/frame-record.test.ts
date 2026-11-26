@@ -10,6 +10,7 @@
  * Asserted here on the client, because the recorder lives on the wire path.
  */
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { removeDirSync } from './remove-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -61,7 +62,7 @@ describe('frame recording', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_RECORD_FRAMES'];
       else process.env['OPENCODE_ACP_CLIENT_RECORD_FRAMES'] = previous;
-      rmSync(dir, { recursive: true, force: true });
+      removeDirSync(dir);
     }
   });
 });

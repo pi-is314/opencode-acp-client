@@ -1,4 +1,5 @@
 import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { removeDirSync } from './remove-dir.js';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
@@ -20,7 +21,7 @@ import {
  * parsing and its failure modes, which is the whole point of the module.
  */
 const dir = mkdtempSync(join(tmpdir(), 'opencode-bin-'));
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+afterAll(() => removeDirSync(dir));
 
 // The resolver probes the binary with `execFileSync`, and Node cannot launch a
 // `.bat`/`.cmd` shim that way (it needs a shell). On Windows the binary npm

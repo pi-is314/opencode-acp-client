@@ -9,6 +9,7 @@
  * disappear when the client is disposed.
  */
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { removeDirSync } from './remove-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -67,7 +68,7 @@ describe('process tree', () => {
       while (alive(pid) && Date.now() < until) await sleep(50);
       expect(alive(pid)).toBe(false);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeDirSync(dir);
     }
   });
 });

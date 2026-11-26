@@ -1,4 +1,5 @@
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { removeDirSync } from './remove-dir.js';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -318,7 +319,7 @@ describe('the epilogue never names an id that cannot resume', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      rmSync(dir, { recursive: true, force: true });
+      removeDirSync(dir);
     }
   });
 });
@@ -470,7 +471,7 @@ describe('TUI state isolation from a native opencode install', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      rmSync(dir, { recursive: true, force: true });
+      removeDirSync(dir);
     }
   });
 
@@ -572,7 +573,7 @@ describe('agent command preflight', () => {
     try {
       return run(dir);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeDirSync(dir);
     }
   }
 

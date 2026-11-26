@@ -1,4 +1,5 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { removeDirSync } from './remove-dir.js';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -21,7 +22,7 @@ function withMap(entries: Record<string, { acpSessionId: string }>, run: () => v
   } finally {
     if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
     else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-    rmSync(dir, { recursive: true, force: true });
+    removeDirSync(dir);
   }
 }
 

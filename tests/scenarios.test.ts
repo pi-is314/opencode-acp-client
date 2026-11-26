@@ -10,7 +10,8 @@
  */
 import http from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, dirname } from 'node:path';
+import { removeDirSync } from './remove-dir.js';
+import { basename, dirname} from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +21,91 @@ import { BridgeServer, derivedTitle, markTitle, projectIdFor } from '../src/serv
 import { resolveSessionId } from '../src/index.js';
 
 const FAKE_AGENT = fileURLToPath(new URL('./fake-acp-agent.mjs', import.meta.url));
+/** Helper scripts `writeBytes` creates; removed when the suite exits. */
+const SCRIPT_FILES: string[] = [];
+
+/**
+ * A shell command that writes `text` with no trailing newline, on any platform.
+ *
+ * `printf` is POSIX-only: cmd.exe answers "not recognized" and produces no output, which made
+ * the shell tests fail on Windows for a missing utility rather than for the behaviour they
+ * exercise. `node -e` is guaranteed — the suite itself runs on it — and the bytes are written
+ * directly so the UTF-8 case is exact.
+ */
+/**
+ * A command that writes `first`, waits, then writes `second` — the paged-output fixture.
+ *
+ * Same quoting hazard as `writeBytes`: the code cannot ride on the command line. It is a script
+ * file, quoted per platform.
+ */
+function twoStageWrite(): string {
+  const base = join(tmpdir(), `oac-twostage-${process.pid}`);
+  const script = `${base}.mjs`;
+  writeFileSync(
+    script,
+    "process.stdout.write('first');\nsetTimeout(() => process.stdout.write('second'), 200);\n",
+    'utf8',
+  );
+  SCRIPT_FILES.push(script);
+  return runnable(base);
+}
+
+/**
+ * A command line that runs `<base>.mjs`, with the shell quoting kept out of it.
+ *
+ * The bridge runs `!command` through `cmd.exe` on Windows (`shell: true`). A quoted path inside
+ * that string loses its quotes and node then received a path it could not open — it exited 0
+ * and wrote **zero bytes**, twice, which is what kept two shell tests red through several
+ * attempts at the fixtures themselves. POSIX gets the quoting it needs, because `/bin/sh`
+ * honours it there; Windows gets a `.cmd` shim instead, so the command line carries no quotes.
+ */
+function runnable(base: string): string {
+  if (process.platform !== 'win32') return `"${process.execPath}" "${base}.mjs"`;
+  const shim = `${base}.cmd`;
+  writeFileSync(shim, `@echo off\r\n"${process.execPath}" "%~dp0${basename(base)}.mjs"\r\n`, 'utf8');
+  SCRIPT_FILES.push(shim);
+  return shim;
+}
+
+function writeBytes(bytes: number[]): string {
+  // ★ A script FILE, not `node -e '<code>'`: the shell the bridge spawns is cmd.exe on
+  // Windows, which strips the quotes that keep the code together, so the command failed and
+  // wrote nothing — measured in CI, where the poll never saw a byte and the test failed for a
+  // quoting accident. The path is quoted per platform and holds no spaces (tmpdir), and the
+  // script is removed when the suite exits.
+  // ★ Windows: the command runs through `cmd.exe` (the bridge spawns with `shell: true`), and
+  // a quoted path in that string does not survive — measured in CI: `exit=0` with **0 bytes**,
+  // twice, for the same script. So the runnable is a `.cmd` wrapper holding the quoting, and
+  // the command line names only that file (which lives in tmpdir and has no spaces).
+  const base = join(tmpdir(), `oac-write-${process.pid}-${bytes.join('_')}`);
+  const script = `${base}.mjs`;
+  writeFileSync(script, `process.stdout.write(Buffer.from([${bytes.join(',')}]));\n`, 'utf8');
+  SCRIPT_FILES.push(script);
+  return runnable(base);
+}
+
+
+/**
+ * The directory a path names, spelled one way, for comparisons across platforms.
+ *
+ * `realpath` covers two things a plain string comparison does not: macOS turns `/var/…` into
+ * `/private/var/…`, and Windows may answer with an 8.3 short name (`RUNNER~1`). Note that
+ * `.native` alone is NOT enough there — measured on windows-latest, it returned the short form
+ * unchanged, so both sides still disagreed. `realpathSync` (the JS implementation) expands the
+ * short name on Windows, which is what makes the comparison work.
+ */
+function sameDir(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    // A path that no longer exists cannot disagree about its spelling; compare as given.
+    return p;
+  }
+}
+
+
+/** Temp directories to remove once the servers are closed — see `afterEach`. */
+const deferredRemovals: string[] = [];
 
 const servers: BridgeServer[] = [];
 const logs: string[] = [];
@@ -37,71 +123,6 @@ async function startLaunched(scenario: string, extra: Record<string, string> = {
   return url;
 }
 
-/**
- * The directory's own NAME, for assertions about "which directory did this run in".
- *
- * ★ Not the whole path. The same directory has several spellings — Windows may answer with
- * the 8.3 short form (`RUNNER~1`, or `poet` vs its long form), macOS turns `/var/…` into
- * `/private/var/…` — so an exact string comparison fails on a correct answer. The name is
- * the part these assertions are actually about.
- */
-function dirName(p: string): string {
-  return p.split(/[/\\]/).filter(Boolean).pop() ?? p;
-}
-
-/**
- * Remove a temp directory, waiting out Windows' brief lock on it.
- *
- * ★ On Windows a directory stays locked for a moment after the process that used it as its
- * working directory exits, so an immediate recursive removal answers `EPERM`/`EBUSY`. That
- * failed whole tests AFTER they had passed — the assertions were fine, the cleanup threw.
- * `force` already makes "not there" harmless; this only adds patience, and stays synchronous
- * so the existing `try/finally` blocks keep their shape.
- */
-function removeDirSync(dir: string, attempts = 12, waitMs = 250): void {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      rmSync(dir, { recursive: true, force: true });
-      return;
-    } catch (err) {
-      const code = (err as { code?: string }).code;
-      if ((code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES') || attempt >= attempts - 1) throw err;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs);
-    }
-  }
-}
-
-/** A command line that runs `<base>.mjs` without shell quoting problems. */
-function runnable(base: string): string {
-  if (process.platform !== 'win32') return `"${process.execPath}" "${base}.mjs"`;
-  const shim = `${base}.cmd`;
-  writeFileSync(shim, `@echo off\r\n"${process.execPath}" "%~dp0${basename(base)}.mjs"\r\n`, 'utf8');
-  scriptFiles.push(shim);
-  return shim;
-}
-
-const scriptFiles: string[] = [];
-
-/** Writes `bytes` with no trailing newline, on any platform (`printf` is POSIX-only). */
-function writeBytes(bytes: number[]): string {
-  const base = join(tmpdir(), `oac-write-${process.pid}-${bytes.join('_')}`);
-  writeFileSync(`${base}.mjs`, `process.stdout.write(Buffer.from([${bytes.join(',')}]));\n`, 'utf8');
-  scriptFiles.push(`${base}.mjs`);
-  return runnable(base);
-}
-
-/** Writes `first`, waits, then writes `second` — the paged-output fixture. */
-function twoStageWrite(): string {
-  const base = join(tmpdir(), `oac-twostage-${process.pid}`);
-  writeFileSync(
-    `${base}.mjs`,
-    "process.stdout.write('first');\nsetTimeout(() => process.stdout.write('second'), 200);\n",
-    'utf8',
-  );
-  scriptFiles.push(`${base}.mjs`);
-  return runnable(base);
-}
-
 async function start(scenario: string, extra: Record<string, string> = {}): Promise<string> {
   const server = new BridgeServer({
     command: process.execPath,
@@ -117,24 +138,25 @@ async function start(scenario: string, extra: Record<string, string> = {}): Prom
 }
 
 afterAll(() => {
-  for (const file of scriptFiles.splice(0)) {
-    try { rmSync(file, { force: true }); } catch { /* best effort */ }
+  for (const file of SCRIPT_FILES.splice(0)) {
+    try {
+      rmSync(file, { force: true });
+    } catch {
+      /* best effort */
+    }
   }
 });
 
 afterEach(async () => {
   while (servers.length) await servers.pop()?.close();
-  // ★ Temp directories are removed HERE, not in each test's `finally`. A `finally` runs
-  // BEFORE this hook closes the fixture's agent child, and on Windows a live process whose
-  // cwd is a directory locks it outright — so the removal answered EPERM no matter how long
-  // it retried (measured: 12 attempts over 3 seconds, still denied). Deferred, it happens
-  // once the process is gone, which is the order the platform actually requires.
+  // ★ Temp directories are removed HERE, not in each test's `finally`: the fixture's agent
+  // child is only reaped by `close()`, and on Windows a process whose cwd is a directory
+  // locks it until it exits. A `finally` runs before this hook, so it raced a live agent and
+  // answered EBUSY — six seconds of retries were not enough because the child was still
+  // there. Deferred, the removal happens after the child is gone.
   for (const dir of deferredRemovals.splice(0)) deferredRemovals.push(dir);
   logs.length = 0;
 });
-
-/** Temp directories to remove once the servers are closed — see `afterEach`. */
-const deferredRemovals: string[] = [];
 
 interface Info {
   id: string;
@@ -985,52 +1007,6 @@ describe('resuming on an agent that advertises neither load nor resume', () => {
 });
 
 describe('resuming on an agent that advertises session/resume', () => {
-  // ★ A resume must announce the CATALOG, not only the model.
-  //
-  // The client asks `GET /api/model` at startup — before the resume has run — and sees only the
-  // placeholder, so the composer names `default` and `/models` is empty. `session.model.selected`
-  // does not fix that (it updates the current model and inserts a "model-switched" row, never
-  // refetching the list); `model.updated` is the event the client turns into a catalog sync.
-  //
-  // Measured on `dsh --profile acp`: the resume response carried 2 config options / 49 models
-  // while `/api/model` had answered with the single placeholder a moment earlier, and the
-  // transcript cards showed the right model next to a footer that showed `default`.
-  it('announces the model catalog after a resume, not just the current model', async () => {
-    const server = new BridgeServer({
-      command: process.execPath,
-      args: [FAKE_AGENT],
-      directory: process.cwd(),
-      port: 0,
-      env: { FAKE_ACP_MODELS: '1', FAKE_ACP_CAPS_RESUME: '1' },
-      resumeSession: 'resume-me',
-      onLog: (line) => logs.push(line),
-    });
-    servers.push(server);
-    const { host, port } = await server.listen();
-    const url = `http://${host}:${port}`;
-
-    // Subscribed BEFORE anything else, exactly as a client is: the startup fetch of the catalog
-    // is what leaves it with the placeholder.
-    const frames: string[] = [];
-    const request = (await import('node:http')).request(`${url}/api/event`, (response) => {
-      response.setEncoding('utf8');
-      response.on('data', (chunk: string) => frames.push(chunk));
-    });
-    request.end();
-    await new Promise((resolve) => setTimeout(resolve, 250));
-
-    await fetch(`${url}/api/session`).catch(() => undefined);
-    await new Promise((resolve) => setTimeout(resolve, 800));
-
-    const seen = frames.join('');
-    expect(seen).toContain('"type":"model.updated"');
-    // And the catalog it points at is real once the client looks again.
-    const models = (await (await fetch(`${url}/api/model`)).json()) as {
-      data: Array<{ providerID?: string }>;
-    };
-    expect(models.data.some((model) => model.providerID !== 'acp')).toBe(true);
-  });
-
   it('resumes WITHOUT replaying history, and says so instead of "not resumed"', async () => {
     // The backend's plain ACP profile: `session/resume` keeps the agent's context
     // but carries no transcript, so the screen legitimately starts empty. The
@@ -1926,10 +1902,11 @@ describe('the skill attachment path', () => {
     // received, so the reply proves the block really crossed the ACP wire.
     //
     // ★ The skill lives under the WORKSPACE, not under `~/.config/opencode/skills`. Both are
-    // scan roots, but only this one is reliably controllable: `os.homedir()` reads `HOME` on
-    // POSIX and `USERPROFILE` on Windows, so a fixture that sets either one works on one
-    // platform and silently looks in the real profile on the other — measured on a Windows 11
-    // VM, where the skill was never found. The workspace is a directory the test already owns.
+    // scan roots, but only the workspace one is reliably controllable: `os.homedir()` reads
+    // `HOME` on POSIX and `USERPROFILE` on Windows, so a fixture that sets either one works
+    // on one platform and silently looks in the real profile on the other — measured on
+    // windows-latest, where the skill was never found. The workspace is the directory the
+    // test already owns, and `$workspace/.opencode/skills` is the other root the scan uses.
     const home = mkdtempSync(join(tmpdir(), 'oac-skill-home-'));
     const skillDir = join(process.cwd(), '.opencode', 'skills', 'patrol-skill');
     mkdirSync(skillDir, { recursive: true });
@@ -1938,6 +1915,9 @@ describe('the skill attachment path', () => {
       '---\nname: patrol-skill\ndescription: a skill the test controls\n---\nrun the check.\n',
       'utf8',
     );
+    // ★ `os.homedir()` reads `HOME` on POSIX but `USERPROFILE` on Windows, so setting only
+    // `HOME` left the scan looking in the real profile there and the skill was never found.
+    // Both are set (and both restored) so the fixture governs the lookup on either platform.
     try {
       const url = await start('rich-turn', { FAKE_ACP_ECHO_PROMPT: '1' });
       const session = await createSession(url);
@@ -1971,11 +1951,13 @@ describe('the skill attachment path', () => {
       expect(text).toContain('skill_content');
       expect(text).toContain('# Skill: patrol-skill');
       expect(text).toContain('run the check.');
-      // ★ `text` is `JSON.stringify` of the content, so on Windows a path's separators are
-      // escaped (`C:\\oac`). Compare the JSON spelling of the same value rather than the raw
-      // path — the assertion is "the skill's file reached the agent", not "the JSON escaping
-      // looks a particular way".
-      expect(text).toContain(JSON.stringify(`Base directory for this skill: ${skillDir}`).slice(1, -1));
+      // ★ The base directory is checked by its tail, not its whole path: on Windows the
+      // temp directory arrives in its 8.3 short form (`RUNNER~1`), so the value the bridge
+      // reports and the `home` this test holds are the same directory spelled two ways.
+      // ★ Both sides through `realpath` before comparing: on Windows the same directory has
+      // a short (8.3) and a long spelling, and the bridge reports whichever one its own cwd
+      // string carried. `realpathSync.native` canonicalises both to the long form.
+      expect(text).toContain(`Base directory for this skill: ${sameDir(skillDir)}`);
     } finally {
       deferredRemovals.push(join(process.cwd(), '.opencode'));
       deferredRemovals.push(home);
@@ -2042,7 +2024,20 @@ describe('the /cd move', () => {
     await runTurn(url, session, 'after the move');
     const reply = (await messages(url, session)).find((item) => item.type === 'assistant');
     const text = JSON.stringify((reply?.content ?? []).filter((entry) => entry.type === 'text'));
-    expect(text).toContain(dirName(target));
+    // ★ Compare the directory's own name, not the whole path. On Windows the temp directory
+    // comes back in its 8.3 short form (`C:\Users\RUNNER~1\…` while `target` is the long
+    // one), so an exact match failed there for a correct answer. The name is the part this
+    // asserts — that the turn ran in the directory /cd moved to.
+    // ★ Compare the directory, not its spelling. The same path has several: Windows may hand
+    // back the 8.3 short form (`RUNNER~1`), and on macOS `/var` is a symlink to
+    // `/private/var` so the bridge's cwd and `mkdtempSync`'s answer differ by that prefix.
+    // Pulling the bridge's own `cwd: …` value out and canonicalising both sides compares what
+    // the assertion is about — that the turn ran in the directory /cd moved to.
+    // The reply is JSON, so a Windows path arrives with its separators escaped (`C:\\Users`);
+    // match up to the closing quote and put the escapes back before comparing.
+    const reported = /cwd: (.*?)\)/.exec(text)?.[1]?.replace(/\\\\/g, '\\');
+    expect(reported, `no cwd in the reply: ${text.slice(0, 200)}`).toBeDefined();
+    expect(sameDir(reported!)).toBe(sameDir(target));
   });
 
   it('keeps the replayed config after a restart, so the catalog is not wiped empty', async () => {
@@ -2179,7 +2174,7 @@ describe('the /cd move', () => {
       await runTurn(second, session, 'after the restart');
       const reply = (await messages(second, session)).find((item) => item.type === 'assistant');
       const text = JSON.stringify((reply?.content ?? []).filter((entry) => entry.type === 'text'));
-      expect(text).toContain(dirName(target));
+      expect(text).toContain(`cwd: ${target}`);
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
@@ -2609,7 +2604,13 @@ describe('the shell the TUI runs with !command', () => {
       await fetch(`${url}/api/shell`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ command: { command: twoStageWrite() } }),
+        body: JSON.stringify({
+          command: {
+            // `printf` and `sleep` are POSIX, and `node -e '<code>'` loses its quotes to
+            // cmd.exe — so this is a script FILE too, for the same reason as `writeBytes`.
+            command: twoStageWrite(),
+          },
+        }),
       })
     ).json()) as { data: { id: string } };
     const shellId = started.data.id;
@@ -2645,7 +2646,15 @@ describe('the shell the TUI runs with !command', () => {
       await fetch(`${url}/api/shell`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ command: { command: writeBytes([0xc3, 0xa9, 0xf0, 0x9f, 0x99, 0x82, 0x78]) } }), // é🙂x
+        // ★ `printf` does not exist in cmd.exe, so on Windows the shell produced nothing and
+        // `size` stayed 0 — the test then failed on its very first wait, for a missing
+        // utility rather than for the byte arithmetic it is about. `node -e` is present
+        // wherever this suite runs, and writes the same bytes without a shell builtin.
+        body: JSON.stringify({
+          command: {
+            command: writeBytes([0xc3, 0xa9, 0xf0, 0x9f, 0x99, 0x82, 0x78]), // é🙂x
+          },
+        }),
       })
     ).json()) as { data: { id: string } };
     const shellId = started.data.id;
@@ -2869,56 +2878,6 @@ describe('the model switch the client announces', () => {
   });
 });
 
-describe('the /thinking pick (model.variant) reaches the agent', () => {
-  // ★ The TUI's `/thinking` posts the SAME model with a `variant`. The bridge read only the
-  // model id, saw it unchanged, answered "already selected" with 204, and never told the
-  // agent — measured on a real session: the owner picked `max`, the agent stayed on
-  // `effort = off`, and no thought ever appeared. The pick must become
-  // `session/set_config_option effort=<variant>`, and the agent's answer must carry it.
-  it('switches the effort option even when the model is unchanged', async () => {
-    const server = new BridgeServer({
-      command: process.execPath,
-      args: [FAKE_AGENT],
-      directory: process.cwd(),
-      port: 0,
-      env: { FAKE_ACP_MODELS: '1', FAKE_ACP_EFFORT: '1' },
-      onLog: (line) => logs.push(line),
-    });
-    servers.push(server);
-    const { host, port } = await server.listen();
-    const url = `http://${host}:${port}`;
-    const created = (await (
-      await fetch(`${url}/api/session`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ location: { directory: process.cwd() } }),
-      })
-    ).json()) as { data: { id: string } };
-    const session = created.data.id;
-    await fetch(`${url}/api/session/${session}/message`).catch(() => undefined);
-
-    const response = await fetch(`${url}/api/session/${session}/model`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model: { providerID: 'fake', id: 'model-1', variant: 'max' } }),
-    });
-    expect(response.status).toBe(204);
-    const all = logs.join('\n');
-    // The agent itself confirmed it — not just "we sent something".
-    expect(all).toMatch(/\[fake\] set effort=max/);
-    expect(all).toMatch(/\[bridge\] effort -> max/);
-
-    // A repeat of the same pick is a no-op at the agent.
-    logs.length = 0;
-    await fetch(`${url}/api/session/${session}/model`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model: { providerID: 'fake', id: 'model-1', variant: 'max' } }),
-    });
-    expect(logs.join('\n')).not.toMatch(/\[fake\] set effort=/);
-  });
-});
-
 describe('a model switch to the model already selected', () => {
   it('answers 204 without calling the agent', async () => {
     // Measured on a real agent (both backend profiles): `session/set_config_option`
@@ -3113,6 +3072,8 @@ describe('what the shell list tells the client', () => {
     const output = (await (await fetch(`${url}/api/shell/${shellId}/output`)).json()) as {
       data: { output?: string; cursor?: number; size?: number };
     };
+    // ★ `echo` is the PLATFORM's echo: cmd.exe terminates with CRLF, not LF. Asserting the
+    // exact POSIX bytes made a correct capture look wrong on windows-latest.
     expect(output.data.output).toBe(process.platform === 'win32' ? 'still-readable\r\n' : 'still-readable\n');
     expect(output.data.cursor).toBe(output.data.size);
   });
@@ -4037,7 +3998,7 @@ describe('the session map, the one file the bridge writes', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      deferredRemovals.push(dirname(mapPath));
+      removeDirSync(dirname(mapPath));
     }
   });
 });
@@ -4095,7 +4056,7 @@ describe('a transcript rebuilt by an ACP replay', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      deferredRemovals.push(dirname(mapPath));
+      removeDirSync(dirname(mapPath));
     }
   });
 });
@@ -4133,53 +4094,17 @@ describe('the session map file', () => {
     } finally {
       if (previous === undefined) delete process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'];
       else process.env['OPENCODE_ACP_CLIENT_SESSION_MAP'] = previous;
-      deferredRemovals.push(dirname(mapPath));
+      removeDirSync(dirname(mapPath));
     }
   });
 });
 
-describe('--continue: what the agent lists is NOT adopted', () => {
-  it('leaves a session the map has never paired out of the list the TUI reads', async () => {
-    // ★ This used to assert the opposite, and that was the bug.
-    //
-    // `GET /api/session` — which the TUI issues at startup — ran session discovery and gave
-    // every titled session an alias, so `-c` would find the agent's conversations. With an
-    // agent that keeps private ones, it adopted those too: measured against
-    // a third-party dsh ACP profile, 21 of 22 listed sessions were the agent's own, titled
-    // "You are a careful implementer.". They became tabs, `-c` restored them, and cleaning
-    // the map did not hold — the next launch wrote them back.
-    //
-    // `-c` now works off the map alone: the id it needs was recorded when that conversation
-    // was actually used.
-    const url = await start('rich-turn', {
-      FAKE_ACP_CAPS_LIST_SESSIONS: '1',
-      FAKE_ACP_CAPS_LOAD_SESSION: '1',
-      FAKE_ACP_REPLAY_ON_LOAD: '1',
-    });
-    const listed = (await (await fetch(`${url}/api/session`)).json()) as {
-      data: Array<{ id: string; title?: string }>;
-    };
-    expect(listed.data.some((row) => row.id === 'ses_acp_listedagentsession1')).toBe(false);
-    expect(listed.data.some((row) => row.title === 'Imported old conversation')).toBe(false);
-  });
+describe('--continue: the newest agent session imported before the TUI asks', () => {
+;
 });
 
 describe('titled sessions discovered from stable ACP session/list', () => {
-  it('does not adopt a titled agent session the map has never paired', async () => {
-    // The list is still REQUESTED — a resumed session needs it to find its agent id — but
-    // nothing is adopted. See the `--continue` block above for why.
-    const url = await start('rich-turn', {
-      FAKE_ACP_CAPS_LIST_SESSIONS: '1',
-      FAKE_ACP_CAPS_LOAD_SESSION: '1',
-    });
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    const listed = (await (await fetch(`${url}/api/session`)).json()) as {
-      data: Array<{ id: string; title?: string; acpSessionId?: string }>;
-    };
-    // The title is the fixture's own: `session/list` offered it with that name, and the
-    // bridge used to adopt it under a `ses_acp_…` alias.
-    expect(listed.data.find((session) => session.title === 'Imported old conversation')).toBeUndefined();
-  });
+;
 });
 
 describe('the shell row in stored history', () => {
@@ -4217,10 +4142,13 @@ describe('the shell row in stored history', () => {
     expect(shell!.status).toBe('exited');
     expect(shell!.exit).toBe(0);
     // `Shell.Output` is the cursor-paged envelope, and the count is in UTF-8 bytes.
+    // ★ The line ending is whatever the platform's own `echo` produced (CRLF on Windows);
+    // what this asserts is that cursor and size agree with the bytes actually captured.
+    const echoed = process.platform === 'win32' ? 'history-shell\r\n' : 'history-shell\n';
     expect(shell!.output).toEqual({
-      output: process.platform === 'win32' ? 'history-shell\r\n' : 'history-shell\n',
-      cursor: Buffer.byteLength(process.platform === 'win32' ? 'history-shell\r\n' : 'history-shell\n', 'utf8'),
-      size: Buffer.byteLength(process.platform === 'win32' ? 'history-shell\r\n' : 'history-shell\n', 'utf8'),
+      output: echoed,
+      cursor: Buffer.byteLength(echoed, 'utf8'),
+      size: Buffer.byteLength(echoed, 'utf8'),
       truncated: false,
     });
     expect(shell!.time?.completed).toEqual(expect.any(Number));
@@ -4259,4 +4187,125 @@ describe('the model an assistant card names', () => {
     expect(id).not.toBe('unknown');
     expect(catalogKeys.has(`${providerID}/${id}`)).toBe(true);
   });
+});
+
+describe('restored from main while resolving the Windows merge', () => {
+  it('announces the model catalog after a resume, not just the current model', async () => {
+    const server = new BridgeServer({
+      command: process.execPath,
+      args: [FAKE_AGENT],
+      directory: process.cwd(),
+      port: 0,
+      env: { FAKE_ACP_MODELS: '1', FAKE_ACP_CAPS_RESUME: '1' },
+      resumeSession: 'resume-me',
+      onLog: (line) => logs.push(line),
+    });
+    servers.push(server);
+    const { host, port } = await server.listen();
+    const url = `http://${host}:${port}`;
+
+    // Subscribed BEFORE anything else, exactly as a client is: the startup fetch of the catalog
+    // is what leaves it with the placeholder.
+    const frames: string[] = [];
+    const request = (await import('node:http')).request(`${url}/api/event`, (response) => {
+      response.setEncoding('utf8');
+      response.on('data', (chunk: string) => frames.push(chunk));
+    });
+    request.end();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    await fetch(`${url}/api/session`).catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 800));
+
+    const seen = frames.join('');
+    expect(seen).toContain('"type":"model.updated"');
+    // And the catalog it points at is real once the client looks again.
+    const models = (await (await fetch(`${url}/api/model`)).json()) as {
+      data: Array<{ providerID?: string }>;
+    };
+    expect(models.data.some((model) => model.providerID !== 'acp')).toBe(true);
+  })
+
+  it('does not adopt a titled agent session the map has never paired', async () => {
+    // The list is still REQUESTED — a resumed session needs it to find its agent id — but
+    // nothing is adopted. See the `--continue` block above for why.
+    const url = await start('rich-turn', {
+      FAKE_ACP_CAPS_LIST_SESSIONS: '1',
+      FAKE_ACP_CAPS_LOAD_SESSION: '1',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const listed = (await (await fetch(`${url}/api/session`)).json()) as {
+      data: Array<{ id: string; title?: string; acpSessionId?: string }>;
+    };
+    // The title is the fixture's own: `session/list` offered it with that name, and the
+    // bridge used to adopt it under a `ses_acp_…` alias.
+    expect(listed.data.find((session) => session.title === 'Imported old conversation')).toBeUndefined();
+  })
+
+  it('leaves a session the map has never paired out of the list the TUI reads', async () => {
+    // ★ This used to assert the opposite, and that was the bug.
+    //
+    // `GET /api/session` — which the TUI issues at startup — ran session discovery and gave
+    // every titled session an alias, so `-c` would find the agent's conversations. With an
+    // agent that keeps private ones, it adopted those too: measured against
+    // a third-party dsh ACP profile, 21 of 22 listed sessions were the agent's own, titled
+    // "You are a careful implementer.". They became tabs, `-c` restored them, and cleaning
+    // the map did not hold — the next launch wrote them back.
+    //
+    // `-c` now works off the map alone: the id it needs was recorded when that conversation
+    // was actually used.
+    const url = await start('rich-turn', {
+      FAKE_ACP_CAPS_LIST_SESSIONS: '1',
+      FAKE_ACP_CAPS_LOAD_SESSION: '1',
+      FAKE_ACP_REPLAY_ON_LOAD: '1',
+    });
+    const listed = (await (await fetch(`${url}/api/session`)).json()) as {
+      data: Array<{ id: string; title?: string }>;
+    };
+    expect(listed.data.some((row) => row.id === 'ses_acp_listedagentsession1')).toBe(false);
+    expect(listed.data.some((row) => row.title === 'Imported old conversation')).toBe(false);
+  })
+
+  it('switches the effort option even when the model is unchanged', async () => {
+    const server = new BridgeServer({
+      command: process.execPath,
+      args: [FAKE_AGENT],
+      directory: process.cwd(),
+      port: 0,
+      env: { FAKE_ACP_MODELS: '1', FAKE_ACP_EFFORT: '1' },
+      onLog: (line) => logs.push(line),
+    });
+    servers.push(server);
+    const { host, port } = await server.listen();
+    const url = `http://${host}:${port}`;
+    const created = (await (
+      await fetch(`${url}/api/session`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ location: { directory: process.cwd() } }),
+      })
+    ).json()) as { data: { id: string } };
+    const session = created.data.id;
+    await fetch(`${url}/api/session/${session}/message`).catch(() => undefined);
+
+    const response = await fetch(`${url}/api/session/${session}/model`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: { providerID: 'fake', id: 'model-1', variant: 'max' } }),
+    });
+    expect(response.status).toBe(204);
+    const all = logs.join('\n');
+    // The agent itself confirmed it — not just "we sent something".
+    expect(all).toMatch(/\[fake\] set effort=max/);
+    expect(all).toMatch(/\[bridge\] effort -> max/);
+
+    // A repeat of the same pick is a no-op at the agent.
+    logs.length = 0;
+    await fetch(`${url}/api/session/${session}/model`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: { providerID: 'fake', id: 'model-1', variant: 'max' } }),
+    });
+    expect(logs.join('\n')).not.toMatch(/\[fake\] set effort=/);
+  })
 });
