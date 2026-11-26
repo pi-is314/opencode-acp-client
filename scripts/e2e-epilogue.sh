@@ -358,7 +358,11 @@ fi
 # ★ The reason must be ON SCREEN, not just in the title: the transcript carries a
 # `Session.Message.System`, which the TUI renders as a notice row (`◈ <text>`).
 # This is the assertion that proves the notice path end-to-end — JSON alone would not.
-if grep -q 'no session/load capability' "$ART/resume-quiet-before.txt" 2>/dev/null; then
+# ★ The notice now NAMES the agent (the command after `--`), so on a narrow pane it WRAPS:
+# measured `… has no session/` / `load capability` on two lines, which made a plain grep for the
+# whole phrase fail while the sentence was plainly on screen. Strip newlines and squeeze spaces
+# before matching, so the assertion is about the sentence, not about where the terminal broke it.
+if tr '\n' ' ' < "$ART/resume-quiet-before.txt" 2>/dev/null | tr -s ' ' | grep -q 'no session/ *load capability'; then
   ok "resume-quiet: the transcript says WHY (notice: agent has no session/load)"
 else
   fail "resume-quiet: no notice in the transcript explaining the empty history"
