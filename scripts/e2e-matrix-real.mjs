@@ -134,6 +134,9 @@ function discoverAgents() {
   // returned `[node, entry]` only, dropping `--acp` — so qwen started as a plain CLI, never
   // spoke ACP, and every cell timed out waiting for `initialize` (measured: a 117-119 s hang
   // per cell, which reads like a slow agent rather than a missing argument).
+  /** An agent installed by its own installer, under a path a launcher script does not search. */
+  const installedBinary = (path, ...flags) => (existsSync(path) ? [path, ...flags] : undefined);
+
   const adapter = (pkg, dir, ...flags) => {
     const entry = join(probe, ...pkg.split('/'), dir);
     return existsSync(entry) ? [process.execPath, entry, ...flags] : undefined;
@@ -172,13 +175,32 @@ function discoverAgents() {
       // API_KEY_INVALID, and a key that is not 36 characters gets 401 UNAUTHENTICATED from the
       // gateway. `agy acp` takes no --model/--effort; both are negotiated over ACP.
       id: 'agy',
-      command: ['agy', 'acp'],
+      // The installer puts the binary under `%LOCALAPPDATA%\agy\bin` and says so ("not present in
+      // your active Environment PATH"), so a Windows run without that directory reports the agent
+      // as missing even though it is installed. Prefer the absolute path when it exists there.
+      command: installedBinary(
+        process.platform === 'win32'
+          ? join(process.env.LOCALAPPDATA ?? '', 'agy', 'bin', 'agy.exe')
+          : join(process.env.HOME ?? '', '.local', 'bin', 'agy'),
+        'acp',
+      ) ?? ['agy', 'acp'],
     },
     {
       // gemini-cli's own ACP server. Same three variables as `agy`, different dialect
       // (google.genai rather than `agy`'s adapter).
       id: 'gemini',
-      command: ['gemini', '--acp'],
+      // gemini-cli's own ACP server. Same three variables as `agy`, different dialect
+      // (google.genai rather than `agy`'s adapter). npm installs it as a `.cmd` shim on Windows,
+      // which `spawn` cannot execute without a shell, so the real entry point is preferred.
+      command:
+        adapter('@google/gemini-cli', 'bundle/gemini.js', '--acp') ??
+        installedBinary(
+          process.platform === 'win32'
+            ? join(process.env.APPDATA ?? '', 'npm', 'node_modules', '@google', 'gemini-cli', 'bundle', 'gemini.js')
+            : join(process.env.HOME ?? '', '.nvm', 'versions', 'node', process.versions.node, 'lib', 'node_modules', '@google', 'gemini-cli', 'bundle', 'gemini.js'),
+          '--acp',
+        ) ??
+        ['gemini', '--acp'],
     },
   ];
   return candidates;
