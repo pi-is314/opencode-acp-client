@@ -92,6 +92,24 @@ reverted).
 above then works. Until that harness exists, the per-agent tab isolation question (the one this
 section has always been about) stays open.
 
+★ **Two real bridge defects were found by this work and fixed** (commit `e6781f6`):
+
+1. `GET /api/project` answered a hard-coded `[]`. The TUI never asks for it, so nothing caught the
+   defect; a client that builds its project list from that route sees no project at all. The route
+   now lists the sessions' directories (plus the launch one), deduplicated.
+2. `location.project.id` hashed the raw launch string while `projectIdFor()` — used by every other
+   surface — hashes `realpath()`. On macOS `/var/...` is `/private/var/...`, so the same workspace
+   produced `proj_d94b…` from one route and `proj_f4e4…` from the other; a client that looks the
+   location's id up in `/api/project` finds nothing.
+
+★ **What still does not work, measured 2026-11-26**: a dev desktop launched moments ago asks for
+`/api/project`, `/api/location` and `/api/vcs`, draws the added server in its sidebar, and then
+**never sends `GET /api/session`** — so no conversation is listed. One occurrence did list the
+session, on a desktop that had already been running; the same click on a fresh one did not, and
+settling 15 s+ did not change it. Dead server entries were ruled out. `scripts/e2e-desktop.mjs`
+(`pnpm e2e:desktop`) is the harness for this: its first eight checks pass, the last two fail, and
+it is deliberately **not** in `pnpm verify`.
+
 ★ **Cleanup trap, learned twice**: `pkill -f "OpenCode.app/Contents/MacOS/OpenCode"` kills the app
 but **not the `opencode-cli serve --service` child it spawned**. That orphan holds 49374 and every
 later desktop launch dies with the port error. After any desktop experiment:

@@ -81,6 +81,20 @@ channel 哈希出 10000..60000。所以两个 desktop 不能同时跑，隔离�
 `OPENCODE_DESKTOP_ISOLATED_SERVER=1`（随机 `--port 0`），`isPackaged === false`，上面每个开关
 都能用。在那套 harness 出现之前，本节一直关心的「每个 agent 的标签页隔离」仍然悬着。
 
+★ **这一轮查出了两个桥的真缺陷，已修**（提交 `e6781f6`）：
+
+1. `GET /api/project` 硬编码返回 `[]`。TUI 从不请求这条路由，所以一直没人发现；任何按项目
+   列表搭侧边栏的客户端都会看到"没有项目"。现在按会话目录（加启动目录）去重列出。
+2. `location.project.id` 对**原始启动路径**做哈希，而 `projectIdFor()`——其他所有接口用的——
+   哈希的是 `realpath()`。macOS 上 `/var/...` 就是 `/private/var/...`，于是同一个工作区一条路由
+   给 `proj_d94b…`、另一条给 `proj_f4e4…`；客户端拿 location 的 id 去 `/api/project` 里找，找不到。
+
+★ **仍然不通过的（2026-11-26 实测）**：刚启动的 dev desktop 会请求 `/api/project`、
+`/api/location`、`/api/vcs`，也会把新增的服务器画进侧边栏，然后**始终不发 `GET /api/session`**
+——所以列不出会话。有一次它确实列出来了，但那台 desktop 已经跑了一段时间；同样的操作在
+全新启动的上不做，等 15 秒以上也不变。已排除僵尸服务器条目。`scripts/e2e-desktop.mjs`
+（`pnpm e2e:desktop`）就是这套 harness：前 8 项通过、后 2 项失败，**故意不进 `pnpm verify`**。
+
 ★ **清理的坑，踩了两次**：`pkill -f "OpenCode.app/Contents/MacOS/OpenCode"` 只杀 app，
 **不杀它拉起的 `opencode-cli serve --service` 子进程**。那个孤儿占着 49374，之后每次启动
 desktop 都撞端口。任何 desktop 实验之后，

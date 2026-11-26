@@ -45,6 +45,7 @@
     "prepack": "pnpm build",
     "prepare": "node scripts/prepare.mjs",
     "e2e:protocol": "node scripts/e2e-protocol.mjs",
+    "e2e:desktop": "node scripts/e2e-desktop.mjs",
     "e2e:todo:win": "node scripts/e2e-todo-windows.mjs",
     "e2e:matrix": "node scripts/e2e-matrix-real.mjs",
     "e2e:conversation": "node scripts/e2e-real-conversation.mjs",

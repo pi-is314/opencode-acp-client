@@ -25,6 +25,17 @@
  *   node scripts/e2e-desktop.mjs
  *   OPENCODE_REPO=/path/to/opencode node scripts/e2e-desktop.mjs
  *   KEEP=1 node scripts/e2e-desktop.mjs      # leave the dev desktop running
+ *
+ * ★ STATUS (measured 2026-11-26): the first eight checks pass — the bridge serves, the dev
+ * desktop opens over CDP, the bridge can be added as a server through its real UI, and the
+ * sidebar lists it. The LAST TWO FAIL: a desktop that was launched moments ago asks for
+ * `/api/project`, `/api/location` and `/api/vcs`, draws the server row, and then never sends
+ * `GET /api/session` at all, so no conversation is listed. A desktop that had been running for a
+ * while DID send it and listed the session — same bridge, same click. Longer settles (15s and
+ * more) do not change it, dead server entries are ruled out, and `/api/project` no longer
+ * answers `[]` (that was a real bug, fixed). So this is an opencode dev-build startup behaviour,
+ * not a bridge defect; the script is kept as the harness for whenever it is resolved, and it is
+ * deliberately NOT part of `pnpm verify`.
  */
 import { spawn, execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync } from 'node:fs';
@@ -230,6 +241,14 @@ const REMOVE_SERVER = (url) => `
     !!document.querySelector('.settings-servers-header, [class*="settings-servers"]') ||
     [...document.querySelectorAll('button')].some((b) => text(b) === '添加服务器');
 
+  // ★ Reload first. The app is in whatever state the run left it (a session view, a stalled
+  // settings page), and a reload is the only thing that reliably returns it to the project list —
+  // measured: without it the cleanup reported "servers panel never opened" and left the entry
+  // behind, and a leftover dead entry is exactly what makes the NEXT run list no sessions.
+  location.hash = '';
+  location.reload();
+  await sleep(9000);
+
   // Same order as ADD_SERVER: open settings, then click the 服务器 nav, THEN wait for the panel.
   if (!ready()) {
     for (const candidate of [...document.querySelectorAll('button')].filter((b) => /^(设置|Preferences)$/.test(text(b)))) {
@@ -337,7 +356,11 @@ async function main() {
     cdp = await Cdp.attach(DEBUG_PORT);
     if (!cdp) throw new Error(`the dev desktop's CDP port ${DEBUG_PORT} never opened`);
     ok('source desktop reachable over CDP');
-    await sleep(6000);
+    // ★ Let the freshly launched app finish starting before touching its UI. Measured: a desktop
+    // that had been running for a while asked for `GET /api/session?limit=5000…` and listed the
+    // conversation, while a desktop touched straight after launch reached `/api/project` and
+    // stopped — the same bridge, the same click, only the age of the app differed.
+    await sleep(Number(process.env.DESKTOP_SETTLE_MS ?? 15_000));
 
     // ★ The app restores the view it was last on, and stores that as a URL under
     // `opencode.desktop.window.<id>.last-active-url`. A previous run leaves a session URL whose
@@ -351,7 +374,16 @@ async function main() {
       return 'cleared';
     `);
     await cdp.eval('location.reload(); return 1;');
-    await sleep(8000);
+    await sleep(20_000);
+
+    // ★ The desktop PROBES a new server (`/api/health`) before it will ever ask for sessions.
+    // Measured: the run that listed a conversation showed `health, health, event, location,
+    // project, session/active, … project, session?limit=5000`, while the failing run reached
+    // `/api/project` without that probe first and never sent `/api/session` at all. So make sure
+    // the probe can succeed before the UI is touched: the bridge must be answering, and the URL
+    // the UI is given must be the one it answers on.
+    const probe = await fetch(`${bridgeUrl}/api/health`).catch(() => undefined);
+    probe?.ok ? ok('the bridge answers its health probe') : bad(`health probe answered ${probe?.status ?? 'nothing'}`);
 
     const added = await cdp.eval(ADD_SERVER(bridgeUrl));
     added === 'added' ? ok('added the bridge as a server through the UI') : bad(`add server: ${added}`);
@@ -382,6 +414,13 @@ async function main() {
     }, 30_000);
     rowPainted ? ok('the sidebar lists the new server') : bad('the sidebar never listed the new server');
 
+    // ★ Let the app SETTLE before expanding. Measured side by side: adding the server, waiting,
+    // and THEN clicking the group made the desktop fetch
+    // `GET /api/session?limit=5000&order=desc&parentID=null` and list the conversation; clicking
+    // the group as soon as the row painted never produced that request at all. The row is drawn
+    // from `/api/project` while the session list is a separate, later query.
+    await sleep(8000);
+
     // ★ Log what the bridge actually receives while the group is being expanded — the difference
     // between "the desktop never asked" and "the desktop asked and got nothing" is invisible from
     // the UI, and it decides whether the fault is here or in the bridge.
@@ -397,14 +436,26 @@ async function main() {
         };
         // the server group's row: its class is group/server (with a slash), so match by attribute
         const row = [...document.querySelectorAll('[class~="group/server"]')].find((r) => /127\.0\.0\.1:\d+/.test(text(r)));
-        if (row) { click(row.querySelector('button') || row); await sleep(4000); }
+        if (row) {
+          click(row.querySelector('button') || row);
+          await sleep(4000);
+          // a second pass: the first click can land before the tree has painted
+          if (!document.body.innerText.includes(${JSON.stringify('session.id')})) {
+            const again = [...document.querySelectorAll('[class~="group/server"]')].find((r) => /127\.0\.0\.1:\d+/.test(text(r)));
+            if (again) { click(again.querySelector('button') || again); await sleep(3000); }
+          }
+        }
         return document.body.innerText;
       `);
       return typeof body === 'string' && body.includes(session.id) ? body : undefined;
     }, 60_000);
-    listed
-      ? ok(`the session ${session.id} is listed under the new server`)
-      : bad(`the session never appeared in the sidebar (bridge saw: ${bridgeRoutes().join(' ; ') || 'no requests'})`);
+    if (listed) ok(`the session ${session.id} is listed under the new server`);
+    else {
+      // Dump the sidebar so the next reader can see WHAT it did show, not just that it was empty.
+      const dump = await cdp.eval('return document.body.innerText.slice(0, 400);').catch(() => '(unavailable)');
+      bad(`the session never appeared in the sidebar (bridge saw: ${bridgeRoutes().join(' ; ') || 'no requests'})`);
+      console.log(`    sidebar was:\n${String(dump).split('\n').map((line) => `      | ${line}`).join('\n')}`);
+    }
 
     const sent = await cdp.eval(`
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
