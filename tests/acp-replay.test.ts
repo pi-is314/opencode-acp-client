@@ -80,6 +80,96 @@ describe('historyFromReplay', () => {
     ]);
     expect(entries).toEqual([]);
   });
+
+  it('marks a single-frame completed tool_call as completed and extracts nested ACP content', () => {
+    const entries = historyFromReplay([
+      u('tool_call', {
+        toolCallId: 'c1',
+        title: 'read',
+        status: 'completed',
+        rawInput: { path: 'HARD_RULES.md' },
+        content: [{ type: 'content', content: { type: 'text', text: 'file contents' } }],
+      }),
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.tools?.[0]).toMatchObject({
+      callId: 'c1',
+      completed: true,
+      output: 'file contents',
+    });
+    expect(entries[0]!.tools?.[0]?.failed).toBeUndefined();
+    const part = entries[0]!.parts?.find((p) => p.kind === 'tool');
+    expect(part).toMatchObject({
+      kind: 'tool',
+      callId: 'c1',
+      completed: true,
+      output: 'file contents',
+    });
+    if (part?.kind === 'tool') expect(part.failed).toBeUndefined();
+  });
+
+  it('records failed and cancelled replayed tool calls with failed: true and their error message', () => {
+    const entries = historyFromReplay([
+      u('tool_call', {
+        toolCallId: 'c-fail',
+        title: 'write',
+        status: 'failed',
+        rawInput: { path: 'x.txt' },
+        rawOutput: { error: 'permission denied' },
+      }),
+      u('tool_call', { toolCallId: 'c-cancel', title: 'bash', rawInput: { command: 'sleep 10' } }),
+      u('tool_call_update', { toolCallId: 'c-cancel', status: 'cancelled' }),
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.tools?.[0]).toMatchObject({
+      callId: 'c-fail',
+      completed: true,
+      failed: true,
+      error: 'permission denied',
+    });
+    expect(entries[0]!.tools?.[1]).toMatchObject({
+      callId: 'c-cancel',
+      completed: true,
+      failed: true,
+    });
+    const parts = entries[0]!.parts?.filter((p) => p.kind === 'tool') ?? [];
+    expect(parts[0]).toMatchObject({
+      kind: 'tool',
+      callId: 'c-fail',
+      completed: true,
+      failed: true,
+      error: 'permission denied',
+    });
+    expect(parts[1]).toMatchObject({
+      kind: 'tool',
+      callId: 'c-cancel',
+      completed: true,
+      failed: true,
+    });
+  });
+
+  it('closes historical tool calls that never received a status or tool_call_update', () => {
+    const entries = historyFromReplay([
+      u('user_message_chunk', { content: { type: 'text', text: 'check' } }),
+      u('tool_call', { toolCallId: 'c1', title: 'read', rawInput: { path: 'a.md' } }),
+      u('tool_call', { toolCallId: 'c2', title: 'search', status: 'in_progress', rawInput: { query: 'x' } }),
+      u('agent_message_chunk', { content: { type: 'text', text: 'done' } }),
+    ]);
+    expect(entries).toHaveLength(2);
+    expect(entries[1]!.tools).toHaveLength(2);
+    for (const t of entries[1]!.tools ?? []) {
+      expect(t.completed).toBe(true);
+      expect(t.failed).toBeFalsy();
+    }
+    const toolParts = entries[1]!.parts?.filter((p) => p.kind === 'tool') ?? [];
+    expect(toolParts).toHaveLength(2);
+    for (const p of toolParts) {
+      if (p.kind === 'tool') {
+        expect(p.completed).toBe(true);
+        expect(p.failed).toBeFalsy();
+      }
+    }
+  });
 });
 
 /**

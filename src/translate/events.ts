@@ -443,20 +443,20 @@ export class AcpTranslator {
     if (meta && typeof meta === 'object' && !Array.isArray(meta)) {
       record.meta = { ...record.meta, ...(meta as Record<string, unknown>) };
     }
-    const messageId = this.activeMessage.get(record.session.id) ?? this.ensureMessage(record);
+    const messageId = () => this.activeMessage.get(record.session.id) ?? this.ensureMessage(record);
     switch (update.sessionUpdate) {
       case UPDATE.agentMessageChunk:
-        this.appendText(record, messageId, update, 'text');
+        this.appendText(record, messageId(), update, 'text');
         return;
       case UPDATE.agentThoughtChunk:
-        this.appendText(record, messageId, update, 'reasoning');
+        this.appendText(record, messageId(), update, 'reasoning');
         return;
       case UPDATE.userMessageChunk:
         // Already rendered when /prompt was accepted.
         return;
       case UPDATE.toolCall:
       case UPDATE.toolCallUpdate:
-        this.applyToolCall(record, messageId, update);
+        this.applyToolCall(record, messageId(), update);
         return;
       case UPDATE.plan:
         this.applyPlan(record, update);

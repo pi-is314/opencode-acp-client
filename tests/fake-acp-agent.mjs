@@ -1070,7 +1070,8 @@ async function onMessage(msg) {
       // configuration itself. Without this the bridge's `record.model` stays unset, the next
       // `session.step.started` carries `model: undefined`, and the client — which dereferences
       // `message.model.providerID` without a guard — crashes on the next turn.
-      if (process.env.FAKE_ACP_MODELS === '1') {
+      const inResponse = process.env.FAKE_ACP_LOAD_MODELS_IN_RESPONSE === '1'
+      if (process.env.FAKE_ACP_MODELS === '1' && process.env.FAKE_ACP_LOAD_NO_MODELS !== '1' && !inResponse) {
         notify('session/update', {
           sessionId,
           update: {
@@ -1090,7 +1091,59 @@ async function onMessage(msg) {
           content: { type: 'text', text: 'replayed-from-agent' },
         })
       }
-      respond(msg.id, {})
+      if (process.env.FAKE_ACP_REPLAY_TOOLS === '1') {
+        update(sessionId, {
+          sessionUpdate: 'user_message_chunk',
+          content: { type: 'text', text: 'check files' },
+        })
+        update(sessionId, {
+          sessionUpdate: 'agent_thought_chunk',
+          content: { type: 'text', text: 'reading first' },
+        })
+        update(sessionId, {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'rep-done',
+          title: 'read',
+          status: 'completed',
+          rawInput: { path: 'README.md' },
+          content: [{ type: 'content', content: { type: 'text', text: 'replayed-tool-output' } }],
+        })
+        update(sessionId, {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'rep-open',
+          title: 'search',
+        })
+        update(sessionId, {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'rep-fail',
+          title: 'write',
+          status: 'failed',
+          rawInput: { path: 'x.txt' },
+          rawOutput: { error: 'boom' },
+        })
+        update(sessionId, {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'all checked' },
+        })
+      }
+      respond(msg.id, inResponse ? { configOptions: [modelOption('["fake","model-1"]')] } : {})
+      if (process.env.FAKE_ACP_POST_LOAD_META === '1') {
+        setTimeout(() => {
+          update(sessionId, {
+            sessionUpdate: 'available_commands_update',
+            availableCommands: [{ name: 'greet', description: 'Run the greet skill' }],
+          })
+          update(sessionId, {
+            sessionUpdate: 'usage_update',
+            used: 1200,
+            size: 200000,
+          })
+          update(sessionId, {
+            sessionUpdate: 'session_info_update',
+            title: 'Today News',
+          })
+        }, 20)
+      }
       return
     }
     case 'session/prompt': {
