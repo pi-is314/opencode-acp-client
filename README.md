@@ -2,7 +2,7 @@
 
 > 中文版：[README.zh.md](README.zh.md)
 
-<img src="docs/images/home-screen.png" alt="The opencode v2 TUI, driving an ACP agent" width="943">
+<img src="docs/images/home-screen.png" alt="The opencode v2 TUI, driving an ACP agent" width="640">
 
 Use the **opencode v2 TUI** as the interface, driving **any ACP agent** (a terminal
 **[ACP](https://agentclientprotocol.com) client**).
@@ -86,7 +86,7 @@ opencode-acp-client -s ses_xxxxx        # a specific session
 and the CLI starts it for you. Where do session ids come from? The `Continue` line printed when the TUI
 exits has been rewritten into a command you can paste:
 
-<img src="docs/images/at-exit.png" alt="The Continue line the TUI prints on exit" width="922">
+<img src="docs/images/at-exit.png" alt="The Continue line the TUI prints on exit" width="640">
 
 Alternatively:
 
