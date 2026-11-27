@@ -938,9 +938,6 @@ export class AcpTranslator {
     const title = typeof update['title'] === 'string' ? update['title'] : '';
     const looksLikeSubagent =
       SUBAGENT_NAME.test(reportedName) || (isCodex && SUBAGENT_VERB_TITLE.test(title));
-    const name =
-      knownName ?? (looksLikeSubagent ? 'task' : nativeToolName(reportedName, update['kind']));
-    if (knownName === undefined) this.toolNames.set(callId, name);
 
     // Merge the input instead of replacing it. opencode's pending frame often carries
     // only `{cwd}` and the command/query arrives with `in_progress`; publishing the
@@ -966,6 +963,18 @@ export class AcpTranslator {
     const normalized =
       merged === undefined ? undefined : withClientInputKey(merged, update['kind'], update['title']);
     if (merged !== undefined) this.toolInputs.set(callId, merged);
+
+    // ★ The name is decided HERE, after the input is known, because the input is the most reliable
+    // signal an adapter gives us (see `inferToolName`). It is still fixed at first sighting: a later
+    // frame's title must never rename the row (`knownName`).
+    // ★ `merged`, NOT `normalized`: `withClientInputKey` has already added a `path`/`command` key by
+    // the time `normalized` exists, so inferring from it would read our own synthesised field as if
+    // the agent had sent it (`{n: 1}` became `read` that way, because the sanitising step gave it a
+    // `path`).
+    const name =
+      knownName ??
+      (looksLikeSubagent ? 'task' : inferToolName(reportedName, update['kind'], merged));
+    if (knownName === undefined) this.toolNames.set(callId, name);
 
     const partId = this.toolParts.get(callId);
     const existing = partId ? this.state.findPart(record, partId) : undefined;
@@ -1407,20 +1416,80 @@ export function mapToolStatus(status: unknown): 'pending' | 'running' | 'complet
  * `edit` covers both "rewrite the file" and "patch part of it"; the agent's own name decides which,
  * because only that distinguishes a whole-file write from an edit.
  */
+const MANAGEMENT_TOOL = /agent|message|job|task_|_task|manager|delegate/i;
+
 const NATIVE_TOOL_NAMES = new Set([
   'bash', 'shell', 'edit', 'write', 'read', 'list', 'glob', 'grep', 'webfetch', 'websearch',
   'task', 'patch', 'batch', 'lsp', 'question', 'skill', 'invalid',
 ]);
 
-function nativeToolName(reported: string, kind: unknown): string {
+/**
+ * Which row component opencode's TUI should draw for a tool call.
+ *
+ * ★ The TUI picks it by NAME (`packages/tui/src/mini/tool.ts`: `write`, `edit`, `read`, `shell`,
+ * `grep`, …) and falls back to `${name} ${JSON.stringify(input)}` for any name it does not know.
+ * Agents name their tools however they like and describe them badly, so the name alone is not
+ * enough. Measured across the matrix, one file write arrives as five different shapes:
+ *
+ *   `opencode acp`   name `write`,  title `write`,            kind `edit`
+ *   `qwen --acp`     no name,       title `WriteFile`,        kind `edit`
+ *   `gemini --acp`   no name,       title `Writing to ../…`,  kind `edit`
+ *   `pi-acp`         no name,       title `write`,            kind `edit`
+ *   `dsh --profile acp`  no name,   title `write`,            kind `other`
+ *
+ * and a shell command as four more (`bash`/`other`, `Shell`/`execute`, `run_command`/`execute`,
+ * and — worst — pi-acp's `echo probe`/`execute`, where the "name" is the command ITSELF). A bridge
+ * that forwards any of those verbatim puts the entire new file into the collapsed caption.
+ *
+ * So the decision is layered, most reliable first:
+ *   1. a name the TUI already knows — nothing to do;
+ *   2. the SHAPE of `rawInput`: `command`/`cmd` means shell, `path`+`content` means write,
+ *      `path`+`old_string` means edit, `pattern` means grep. Field names are far more stable
+ *      across adapters than tool names, and they are what the tool will actually DO;
+ *   3. the agent's own word, read as a verb (`WriteFile`, `ReadFile`, `run_command`, `bash`);
+ *   4. `kind`, the ACP category — only as a last resort, because it is the least specific
+ *      (`dsh` sends `other` for everything, `codex-acp` sends `read` for a shell command).
+ */
+export function inferToolName(reported: string, kind: unknown, input: unknown): string {
   if (NATIVE_TOOL_NAMES.has(reported)) return reported;
-  // ★ A name that spells out what the tool DOES outranks a broad `kind`. `codex-acp` reports
-  // `exec_command` with `kind: "read"` — its shell wrapper reads files too — and mapping that to
-  // `read` rendered a command run as a file view. The TUI's own names win when the agent's word
-  // matches one of them semantically.
-  // `\b` does not fire between `exec` and `_` (`exec_command`), so the separators are explicit.
-  if (/(^|[^a-z])(exec|shell|bash|command|run)([^a-z]|$)/i.test(reported)) return 'shell';
-  if (/(^|[^a-z])(write|create|save|overwrite)([^a-z]|$)/i.test(reported)) return 'write';
+
+  const fromShape = toolNameFromInput(input);
+  if (fromShape) {
+    // A name that contradicts the shape is usually the agent's own alias for the same act
+    // (`WriteFile` with `{path, content}`); the shape wins because it is what runs.
+    return fromShape;
+  }
+
+  // ★ A tool that MANAGES other agents or jobs (`list_agents`, `send_message`, `job_list`,
+  // `subagent_manager`) is not itself a file/shell/search tool: its name merely contains a word
+  // that looks like one. The TUI's generic card is the right rendering for it, so it keeps its name.
+  if (MANAGEMENT_TOOL.test(reported)) return reported;
+
+  const words = reported.toLowerCase();
+  // ★ Two vocabularies, because `kind: "other"` is the spec's "I cannot classify this" and one
+  // must not read generic English into a tool name on that basis: `echo-open` became `read`
+  // because it contains `open`. With a directional `kind`, any of the usual verbs may refine it;
+  // with `other`, only an unambiguous name — one that SPELLS OUT the act (`bash`, `exec_command`,
+  // `WriteFile`, `read_file`) — is trusted. `dsh --profile acp` sends `other` for everything, so
+  // refusing to read the name at all would leave its shell rows on the generic card.
+  const directional =
+    kind === undefined || kind === null || (typeof kind === 'string' && kind.toLowerCase() !== 'other');
+  // `\b` does not fire between `exec` and `_` (`exec_command`), so separators are explicit.
+  if (/(^|[^a-z])(exec|shell|bash|command)([^a-z]|$)/.test(words)) return 'shell';
+  if (/(^|[^a-z])(write|writefile|create|save|overwrite)([^a-z]|$)/.test(words)) return 'write';
+  if (/(^|[^a-z])(read|readfile)([^a-z]|$)/.test(words)) return 'read';
+  if (!directional) {
+    if (/(^|[^a-z])(run|list|find)([^a-z]|$)/.test(words)) return reported;
+    if (/(^|[^a-z])(glob|grep|search)([^a-z]|$)/.test(words)) return 'grep';
+    if (/patch|edit/.test(words)) return 'edit';
+    return reported;
+  }
+  if (/(^|[^a-z])(run|open|view|cat)([^a-z]|$)/.test(words)) return 'shell';
+  if (/(^|[^a-z])(edit|replace_in|apply_patch)([^a-z]|$)/.test(words)) return 'edit';
+  if (/(^|[^a-z])(glob|ls|list|find)([^a-z]|$)/.test(words)) return 'list';
+  if (/(^|[^a-z])(grep|search|rg)([^a-z]|$)/.test(words)) return 'grep';
+  if (/(^|[^a-z])(fetch|http|url|web)([^a-z]|$)/.test(words)) return 'webfetch';
+
   switch (kind) {
     case 'read':
       return 'read';
@@ -1434,11 +1503,36 @@ function nativeToolName(reported: string, kind: unknown): string {
     case 'move':
       return 'patch';
     case 'edit':
-      // A whole-file rewrite vs. an in-place change: `write`/`create`/`save` vs `edit`/`patch`.
-      return /\b(write|create|save|overwrite)\b/i.test(reported) ? 'write' : 'edit';
+      return 'edit';
     default:
       return reported;
   }
+}
+
+/** The tool's category read off its argument names — the one signal that survives every adapter. */
+function toolNameFromInput(input: unknown): string | undefined {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const keys = new Set(Object.keys(input as Record<string, unknown>));
+  const has = (...names: string[]): boolean => names.some((name) => keys.has(name));
+
+  // Shell first: a command field is unambiguous, whatever else travels with it.
+  if (has('command', 'cmd', 'script', 'shell', 'arguments', 'args')) {
+    // `arguments` is dsh's shell wrapper; `args` alone is usually an argv list for a tool.
+    if (has('command', 'cmd', 'script', 'shell') || keys.has('arguments')) return 'shell';
+  }
+  if (has('pattern') || has('regex', 'query', 'search')) {
+    return has('path', 'include') && !has('glob') ? 'grep' : 'grep';
+  }
+  if (has('glob') && !has('content', 'old_string', 'oldText', 'new_string', 'newText')) return 'list';
+  if (has('path', 'file_path', 'filePath', 'filename')) {
+    if (has('content', 'file_text', 'new_content', 'text', 'newText', 'new_str')) {
+      return has('old_string', 'oldText', 'old_str') ? 'edit' : 'write';
+    }
+    if (has('old_string', 'oldText', 'old_str', 'edits', 'patch')) return 'edit';
+    return 'read';
+  }
+  if (has('url', 'uri')) return 'webfetch';
+  return undefined;
 }
 
 const SUBAGENT_NAME = /^(subagents?|task|agent)$/i;
