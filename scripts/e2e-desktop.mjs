@@ -26,16 +26,36 @@
  *   OPENCODE_REPO=/path/to/opencode node scripts/e2e-desktop.mjs
  *   KEEP=1 node scripts/e2e-desktop.mjs      # leave the dev desktop running
  *
- * ★ STATUS (measured 2026-11-26): the first eight checks pass — the bridge serves, the dev
- * desktop opens over CDP, the bridge can be added as a server through its real UI, and the
- * sidebar lists it. The LAST TWO FAIL: a desktop that was launched moments ago asks for
- * `/api/project`, `/api/location` and `/api/vcs`, draws the server row, and then never sends
- * `GET /api/session` at all, so no conversation is listed. A desktop that had been running for a
- * while DID send it and listed the session — same bridge, same click. Longer settles (15s and
- * more) do not change it, dead server entries are ruled out, and `/api/project` no longer
- * answers `[]` (that was a real bug, fixed). So this is an opencode dev-build startup behaviour,
- * not a bridge defect; the script is kept as the harness for whenever it is resolved, and it is
- * deliberately NOT part of `pnpm verify`.
+ * ★ STATUS (measured 2026-11-27, on `feat/opencode-desktop` rebased onto main): SEVEN checks pass —
+ * the bridge serves, the dev desktop opens over CDP, the bridge is added as a server through its
+ * real UI, and the sidebar lists it. The last two fail: no conversation appears, because the
+ * desktop never asks the bridge for `/api/session`.
+ *
+ * ★ What the desktop DOES ask the bridge for: `/api/health`, `/api/location`, `/api/vcs`,
+ * `/api/project`, `/api/session/active` — every one answers 200 with correct data
+ * (`/api/project` returns `{id, directory, canonical, worktree, expanded}`, the shape
+ * `LocalProject = Partial<Project> & { worktree: string }` requires). The list query lives in
+ * `home/sessions/controller.tsx` behind `enabled: !!ctx && connection.status() === "connected"`
+ * and `const selected = home.selection.value().directory; if (!selected) return`.
+ *
+ * ★ Ruled out by measuring, not by reasoning:
+ *   - **Not the bridge.** Every route it is asked for answers correctly, verified with `curl`.
+ *   - **Not the click target.** `HomeProjectNavButton`'s onClick is `onFocusServer`, and the row's
+ *     first button IS that control (its inner span is the collapse chevron). Clicking it leaves
+ *     `data-selected` on the LOCAL server row; a MutationObserver saw no flip at all.
+ *   - **Not the persisted state.** Writing `home.selection.{server,directory}` into
+ *     `opencode.global.dat:layout` and `projects[<bridge url>]` into `opencode.global.dat:server`
+ *     survives a reload (read back verbatim, `serverList` included) and still shows the empty
+ *     state — with 12s and with 25s.
+ *   - **Not a directory mismatch.** The directory written is the one `/api/location` answers with,
+ *     which is the one the session lives in.
+ *
+ * ★ What is left, and why this script stops here: the desktop's project tree is the CLIENT's own
+ * persisted list (`createServerProjects`, `runtime/server/registry.tsx`); `/api/project` supplies
+ * candidates only. A project enters that list through `home.project.add`, whose only UI route is
+ * `choose()` → `pickDirectory()` → `platform.openDirectoryPickerDialog` — a NATIVE macOS dialog,
+ * behind an IPC `MessagePort` the page cannot intercept. Closing it needs a stub for that port or
+ * a desktop build with a non-native picker; neither belongs in a bridge repository.
  */
 import { spawn, execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
