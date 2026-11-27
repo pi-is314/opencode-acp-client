@@ -158,6 +158,63 @@ on a callback with no answer hangs forever, because ACP has no timeout for this.
 | `compaction_update` | ❌ never arrives | The agent does not send it: we do not advertise `session.compaction` |
 | `compaction_summary_chunk` | ❌ never arrives | Same |
 
+### Which card a tool call gets: how the name is decided
+
+A tool card is chosen by NAME. `packages/tui/src/mini/tool.ts` maps a small vocabulary
+(`write`, `edit`, `read`, `shell`, `grep`, `glob`, `list`, `webfetch`, `task`, …) onto a renderer, and
+anything outside it falls through to
+
+```ts
+const title = JSON.stringify(ctx.input);
+return { title: `${ctx.name} ${title}` };      // fallbackInline
+```
+
+which is how a file write came to show **the entire new file** in its collapsed caption (measured on
+`qwen --acp`, writing a 300-line Go test). So the bridge must hand the TUI a name it knows — but ACP
+gives agents very little help in doing that, and each agent answers differently:
+
+| Agent | `name` | `title` | `kind` | `rawInput` |
+|---|---|---|---|---|
+| `opencode acp` | `shell` / `read` / `write` / `glob` | the same | `execute` / `read` / `edit` / `search` | — |
+| `qwen --acp` | **none** | `Shell` / `ReadFile` / `WriteFile` | accurate | often `{}` |
+| `dsh --profile acp` | **none** | `bash` / `read` / `glob` | **`other`, always** | `command`, `file_path`, `pattern` |
+| `pi-acp` | **none** | **the command itself** (`echo probe`) | accurate | `path`, `content` |
+| `gemini --acp` | **none** | prose (`Writing to ../tmp/x`) or empty | accurate | `path`, `content` |
+| `agy acp` | `run_command` | the command | `execute` | `command` |
+| `codex-acp` | `exec_command` | prose | **`read`** (its shell wrapper) | `command` |
+
+No single field carries the answer, so `inferToolName` decides in layers, most reliable first:
+
+1. **A name the TUI already knows** — nothing to do (`opencode acp` lands here, and so does any agent
+   that says `bash` or `glob`).
+2. **The shape of the input** — a `command` field is a shell, `path` + `content` a write,
+   `path` + `old_string` an edit, a `pattern` a search, `url` a fetch. **Field names outlive tool
+   names**: they are what the call will actually do, and the six agents whose names are useless are
+   all rescued here.
+3. **The agent's own word**, when it spells out the act (`WriteFile`, `ReadFile`, `exec_command`).
+4. **`kind`**, last — it is the least specific (`dsh` sends `other` for everything, `codex-acp`
+   sends `read` for a shell).
+
+Two rules that exist because breaking them was measured:
+
+- ★ **`kind: "other"` is the spec's "I cannot classify this".** Reading generic English into a tool
+  name on that basis turned `echo-open` into `read` because it contains `open`. With `other`, only a
+  name that spells out the act is trusted; `run`, `open`, `ls` and the like are not.
+- ★ **The inference reads the agent's input, not the normalised one.** `withClientInputKey` has
+  already added a `path`/`command` by the time the normalised copy exists, so inferring from it read
+  `{n: 1}` as `read` on the strength of a field we ourselves had invented.
+
+Two things the inference deliberately does **not** touch:
+
+- A tool that manages other agents or jobs (`list_agents`, `send_message`, `job_list`) keeps its
+  name: the generic card is the right rendering, and its name merely contains a word like `list`.
+- The name is fixed at **first sighting**. A later frame's `title` is the tool's argument
+  (`echo hello`) and must never rename the row — letting it do so once turned a shell card into an
+  unknown tool.
+
+`tests/tool-names.test.ts` pastes the measurements above, one assertion per agent, so a new adapter
+with a new vocabulary has a place to be recorded instead of a comment to be forgotten.
+
 ### Usage reporting: stable field vs opencode v2's unstable one
 
 The stable protocol reports context usage as an update:

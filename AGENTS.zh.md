@@ -30,7 +30,7 @@
 |---|---|---|
 | 1 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 进程模型 + 一个回合的端到端时序（**为什么 HTTP 响应是占位符**、为什么要关掉所有 open part）|
 | 2 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | 我们实现的 opencode v2 面 + **v2 事件词汇**（事件名/形状写错 = 静默不渲染）。★ **权威是公开规范**：<https://opencode.ai/v2/openapi.json>（OpenAPI 3.1.0）|
-| 3 | [docs/ACP-MATRIX.md](docs/ACP-MATRIX.md) | ★ **能力矩阵**：我们宣告/实现了哪些 ACP 方法（13+11+1）、`session/update` 的 14 个变体、**agent 缺能力时掉什么功能**、以及 opencode v2 那些**无法与 ACP 对齐**的面（依据是 ACP v1.25.0 schema，不是概览页）|
+| 3 | [docs/ACP-MATRIX.md](docs/ACP-MATRIX.md) | ★ **能力矩阵**：我们宣告/实现了哪些 ACP 方法（13+11+1）、`session/update` 的 14 个变体、**工具调用用哪张卡片、工具名怎么定**（§4）、**agent 缺能力时掉什么功能**、以及 opencode v2 那些**无法与 ACP 对齐**的面（依据是 ACP v1.25.0 schema，不是概览页）|
 | 3.5 | [docs/ACP-CLIENT-OBLIGATIONS.md](docs/ACP-CLIENT-OBLIGATIONS.md) | ★ **规范里的每条 MUST 一行**：引文 → 本客户端怎么做 → 落在哪个文件。动 ACP 面之前读它，让每条 MUST 都被回答而不是被漏掉 |
 | 4 | [docs/COMPAT-OPENCODE.md](docs/COMPAT-OPENCODE.md) | ★ **opencode v2 版本策略**（`>=2.0.0`）、已实测版本、以及「官方发新 release 就自动跑一遍门控」的机制 |
 | 5 | [docs/KNOWN-ISSUES.zh.md](docs/KNOWN-ISSUES.zh.md) | **尚未解决**的问题与已知限制（已修的记录不进仓库）|

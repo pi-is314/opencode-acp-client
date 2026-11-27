@@ -249,6 +249,56 @@ opencode v2 的 TUI 却按**它自己的**输入键来渲染：read/edit 行读 
 第一个像路径的值复制到 `path`；对 `execute`，第一个字符串复制到 `command`。
 agent 发来的键永不被覆盖，没有 `kind` 就什么都不猜。守卫测试：`tests/translate.test.ts`。
 
+### 6.4 工具卡片认哪个名字
+
+卡片是按**名字**选的。`packages/tui/src/mini/tool.ts` 把一小组词汇（`write`、`edit`、`read`、
+`shell`、`grep`、`glob`、`list`、`webfetch`、`task` …）映射到渲染器，词汇之外的都落到
+
+```ts
+const title = JSON.stringify(ctx.input);
+return { title: `${ctx.name} ${title}` };      // fallbackInline
+```
+
+写文件时整份新文件出现在**折叠状态的标题里**就是这么来的（`qwen --acp` 写一个 300 行的 Go 测试，
+实测）。所以桥必须交给 TUI 一个它认识的词 —— 但 ACP 在这方面几乎没给 agent 任何约束，每家都不同：
+
+| Agent | `name` | `title` | `kind` | `rawInput` |
+|---|---|---|---|---|
+| `opencode acp` | `shell` / `read` / `write` / `glob` | 同左 | `execute` / `read` / `edit` / `search` | — |
+| `qwen --acp` | **无** | `Shell` / `ReadFile` / `WriteFile` | 准确 | 常为 `{}` |
+| `dsh --profile acp` | **无** | `bash` / `read` / `glob` | **恒为 `other`** | `command`、`file_path`、`pattern` |
+| `pi-acp` | **无** | **命令原文**（`echo probe`）| 准确 | `path`、`content` |
+| `gemini --acp` | **无** | 描述句（`Writing to ../tmp/x`）或空 | 准确 | `path`、`content` |
+| `agy acp` | `run_command` | 命令 | `execute` | `command` |
+| `codex-acp` | `exec_command` | 描述 | **`read`**（它的 shell 包装）| `command` |
+
+没有任何一个字段够用，所以 `inferToolName` 按可靠度分层：
+
+1. **名字 TUI 已认识** —— 不用动（`opencode acp` 全走这条；说 `bash`、`glob` 的 agent 也一样）。
+2. **输入的形状** —— 有 `command` 就是 shell，`path` + `content` 是 write，`path` + `old_string`
+   是 edit，`pattern` 是搜索，`url` 是 fetch。**字段名比工具名活得久**：它代表这次调用实际要做什么，
+   名字毫无用处的六家全靠这条救回。
+3. **agent 自己的词**，当它把动作拼出来时（`WriteFile`、`ReadFile`、`exec_command`）。
+4. **`kind`**，最后 —— 它最不具体（`dsh` 一律发 `other`，`codex-acp` 把 shell 标成 `read`）。
+
+两条规则是因为打破它们被实测抓到才写下的：
+
+- ★ **`kind: "other"` 是规范里"我无法分类"的明确表态。** 在这基础上把普通英语读进工具名，
+  让 `echo-open` 因为含 `open` 变成了 `read`。`other` 之下只信任**拼出动作**的名字，
+  `run`、`open`、`ls` 这类不算。
+- ★ **推断读的是 agent 的原始输入，不是归一化后的副本。** `withClientInputKey` 那时已经补过
+  `path`/`command`，从它推断等于拿**我们自己编出来的字段**当证据 —— `{n: 1}` 被读成 `read` 就是这样。
+
+推断**故意不碰**的两种情况：
+
+- 管理其它 agent 或作业的工具（`list_agents`、`send_message`、`job_list`）保持原名：通用卡片才是
+  对的渲染，它的名字只是恰好含了 `list` 这种词。
+- 名字在**第一次见到时**就固定。后续帧的 `title` 是工具的参数（`echo hello`），绝不能再改行名 ——
+  曾经让它改过一次，结果 shell 卡片变成了未知工具。
+
+`tests/tool-names.test.ts` 把上面的实测逐条贴了进去，每家一条断言。以后遇到新词汇的适配器，
+有地方可以登记，而不是留一条会被忘掉的注释。
+
 ## 7. 与 opencode v2 公开规范的**故意**差异
 
 并非所有偏差都是缺口 —— 有些是客户端会读的**超集**。它们连同原因一起登记在
