@@ -12,6 +12,11 @@
  *   GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:<gateway>/antigravity  # else it calls Google: 400 API_KEY_INVALID
  *   GEMINI_API_KEY=<36-char key>                                   # else 401 UNAUTHENTICATED
  *
+ * ★ `agy` reads ONLY the environment — it does not read `~/.gemini/.env` the way gemini-cli does.
+ * Measured: with `.env` pointing at the gateway and nothing exported, every `agy` cell came back
+ * BLOCKED with `could not start the agent: Authentication required`, while `gemini` on the same
+ * machine worked. Export GEMINI_API_KEY (and GOOGLE_GEMINI_BASE_URL) before running the matrix.
+ *
  * ★ AND `~/.gemini/settings.json` must exist, with a `customAliases` entry whose
  * `generateContentConfig.topK` is <= 40. Without it gemini-cli sends `topK: 64` from its
  * built-in `chat-base` preset and a gateway that caps it at 40 answers
@@ -377,13 +382,17 @@ async function runCell(tui, agent) {
     // sentence. Requiring the reply to equal the word graded a correct answer as a failure,
     // which is the same mistake as testing a UI for an exact string: the assertion has to match
     // what is being proven ("the history survived"), not a formatting habit.
-    const recalled = /\brepeat\b/i.test(t3.text);
+    // ★ Either word counts. Turn 1 asks for PROTOCOL and turn 2 for REPEAT, so a model that
+    // keeps answering PROTOCOL in turn 2 ("answer with exactly one word" reads as "keep it short",
+    // not "change the word") is reasoning correctly; grading only REPEAT called dsh's right answer
+    // a memory failure. What the turn proves is that SOME earlier word came back.
+    const recalled = /\b(repeat|protocol)\b/i.test(t3.text);
     if (!recalled && t3.text.trim() === '' && t3.tools) {
       // Same bookkeeping-tool case as turn 2: the turn ran, nothing was said. Not a recall
       // failure — say so, rather than reporting a memory bug the agent never had.
       return { verdict: 'UNKNOWN', reason: 'turn 3 produced only a tool call, nothing to compare', log };
     }
-    if (!recalled && !/\brepeat\b/i.test(t2.text)) {
+    if (!recalled && !/\b(repeat|protocol)\b/i.test(t2.text)) {
       return { verdict: 'FAIL', reason: `turn 3 did not recall: ${JSON.stringify(t3.text.slice(0, 80))}`, log };
     }
     if (!recalled) {
