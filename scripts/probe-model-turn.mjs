@@ -11,11 +11,12 @@ const bridge = spawn(process.execPath, ['dist/index.js', '--no-tui', '--bridge-p
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let ready = '';
+let settled = false;
 const waitReady = new Promise((resolve) => {
   bridge.stdout.on('data', (d) => {
     ready += d;
     const m = ready.match(/"url":"([^"]+)"/);
-    if (m && !ready.done) { ready.done = true; resolve(m[1]); }
+    if (m && !settled) { settled = true; resolve(m[1]); }
   });
 });
 const base = await waitReady;
