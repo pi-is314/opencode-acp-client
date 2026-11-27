@@ -119,6 +119,32 @@ updates (measured: 16 thought chunks in one turn). An earlier reading of this pr
 that profile "has no effort option" — that was a probe that only looked for the id `effort`;
 match the CATEGORY, or the next agent's choice of name hides the option entirely.
 
+## What ACP has no way to express: moving a session to another directory
+
+opencode's TUI has `/cd`, and the server implements it as `session.move`: the session id stays the
+same and a `move` item is dropped into that session's inbox (`packages/core/src/session/move.ts`),
+so the conversation's `location` changes in place and the next step runs in the new directory.
+
+**ACP has nothing equivalent.** The session's `cwd` is part of what a session IS
+([session-setup](https://agentclientprotocol.com/protocol/v1/session-setup)): it is passed to
+`session/new`, `session/load` and `session/resume`, it must be part of the session's effective root
+set, and it stays the base for relative-path resolution. The spec defines no `session/move`.
+`additionalDirectories` is not a substitute — it ADDS roots while keeping `cwd` primary.
+
+So the bridge implements `/cd` as the closest thing the protocol allows: `session/load` of the same
+session id with the new `cwd`. Agents decide how strict to be about that, and both answers are legal:
+
+| Agent | `session/load` with a different `cwd` | What the user sees |
+|---|---|---|
+| `dsh --profile acp`, `opencode acp`, `pi-acp` | accepted; the session continues in the new directory | `/cd` works, the transcript is replayed onto the new location |
+| **`qwen --acp`** | **rejected**: `Invalid params: The live session belongs to another workspace` | `400 the agent refused the move: …`, and the session stays where it was |
+
+★ Measured against qwen directly, without the bridge: a session created in `/tmp/qdir1` and then
+loaded with `cwd: /tmp/qdir2` answers `-32602 "The live session belongs to another workspace."`
+It also answers `-32601 "Method not found"` to `session/close`, so "close then load" is not a way
+round it either. **There is no client-side fix** — a new session in the new directory would lose
+the conversation identity that `/cd` exists to preserve.
+
 ## Capabilities opencode v2 does not have
 
 Some ACP features have nowhere to land in the TUI. That is not a bridge gap, and

@@ -110,6 +110,31 @@ opencode v2 TUI 没有对应 ACP 能力的面。
 。本项目早前曾据此得出"该 profile 没有 effort 选项"的结论——那是一次只查 `effort` 这个 id 的探测；
 按 CATEGORY 匹配，否则下一个 agent 换个名字就把整个选项藏起来了。
 
+## ACP 无法表达的：把会话移到另一个目录
+
+opencode 的 TUI 有 `/cd`，服务端把它实现成 `session.move`：会话 id 不变，往该会话的收件箱里投
+一个 `move` 项（`packages/core/src/session/move.ts`），于是这条对话的 `location` 原地改变，下一
+步就在新目录里跑。
+
+**ACP 没有对应能力。** 会话的 `cwd` 是「这个会话是什么」的一部分
+（[session-setup](https://agentclientprotocol.com/protocol/v1/session-setup)）：它被传给
+`session/new`、`session/load` 和 `session/resume`，必须是会话有效根集合的一部分，并且始终是相对
+路径解析的基准。规范里**没有** `session/move`。`additionalDirectories` 不是替代品 —— 它是**增加**
+根目录，`cwd` 仍然是主目录。
+
+所以桥把 `/cd` 实现成协议允许范围内最接近的做法：用**同一个会话 id**、带**新 `cwd`** 去
+`session/load`。严不严格由 agent 自己决定，两种回答都合法：
+
+| Agent | `session/load` 换个 `cwd` | 用户看到什么 |
+|---|---|---|
+| `dsh --profile acp`、`opencode acp`、`pi-acp` | 接受；会话在新目录继续 | `/cd` 生效，历史重放到新位置 |
+| **`qwen --acp`** | **拒绝**：`Invalid params: The live session belongs to another workspace` | `400 the agent refused the move: …`，会话留在原处 |
+
+★ 绕过桥直连 qwen 实测：在 `/tmp/qdir1` 建的会话，用 `cwd: /tmp/qdir2` 去 load，回答
+`-32602 "The live session belongs to another workspace."`；它对 `session/close` 回答
+`-32601 "Method not found"`，所以「先关再开」也走不通。**客户端这边没有解法** —— 在新目录新建会话，
+就丢掉了 `/cd` 本来要保留的那条对话身份。
+
 ## opencode v2 里没有落点的能力
 
 有些 ACP 能力在 TUI 里**没有地方可放**。这不是桥的缺口，而桥**也不会为它造一个落点** —— 一个没人渲染的事件，看起来和"功能正常"一模一样，直到你发现屏幕是空的。
