@@ -245,9 +245,17 @@ function discoverAgents() {
  * the agent dies with ENOENT at startup and the failure surfaces as "agent exited".
  */
 function withSystemBinaries(path) {
-  const extra = ['/usr/sbin', '/sbin', '/usr/local/sbin'];
-  const have = new Set((path ?? '').split(':').filter(Boolean));
-  return [...have, ...extra.filter((dir) => !have.has(dir))].join(':');
+  // ★ The separator is the PLATFORM's, not a constant `:`. Splitting a Windows PATH on `:` turns
+  // `C:\Program Files\nodejs;C:\Users\me\AppData\Roaming\npm` into fragments and rejoining
+  // with `:` produces one unusable path — so the bridge could not find ANY npm-installed agent
+  // (`copilot`, `pi-acp`) and both reported `agent exited: ACP connection closed` within a second,
+  // while `opencode acp` passed because the matrix gives it an absolute path. Measured on the
+  // Windows VM: the same `copilot --acp` starts fine with the inherited PATH untouched.
+  const sep = process.platform === 'win32' ? ';' : ':';
+  // POSIX-only directories: a Windows PATH has no `/usr/sbin`.
+  const extra = process.platform === 'win32' ? [] : ['/usr/sbin', '/sbin', '/usr/local/sbin'];
+  const have = new Set((path ?? '').split(sep).filter(Boolean));
+  return [...have, ...extra.filter((dir) => !have.has(dir))].join(sep);
 }
 
 // ---------------------------------------------------------------- one cell
