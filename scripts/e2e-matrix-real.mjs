@@ -115,8 +115,17 @@ function discoverTuis() {
     }
   }
   for (const root of roots.sort()) {
+    // ★ Probe BOTH spellings, not the one this platform "should" use: `@opencode/cli` 2.0.32 and
+    // 2.3.2 ship the macOS binary as `bin/opencode.exe` (a Mach-O file with a `.exe` name), so
+    // guessing from `process.platform` reported those two versions as missing on Darwin and the
+    // cells came back BLOCKED with `Internal error: Internal service failure` — the launcher had
+    // fallen through to a path that does not exist. Order decides preference on the one platform
+    // where both could exist; `existsSync` decides in practice.
+    const native = process.platform === 'win32' ? 'opencode.exe' : 'opencode';
+    const other = native === 'opencode' ? 'opencode.exe' : 'opencode';
     const candidates = [
-      join(root, 'node_modules', '@opencode', 'cli', 'bin', process.platform === 'win32' ? 'opencode.exe' : 'opencode'),
+      join(root, 'node_modules', '@opencode', 'cli', 'bin', native),
+      join(root, 'node_modules', '@opencode', 'cli', 'bin', other),
       join(root, 'node_modules', '.bin', process.platform === 'win32' ? 'opencode.cmd' : 'opencode'),
     ];
     const bin = candidates.find((c) => existsSync(c));

@@ -70,7 +70,7 @@ fi
 # the refspec names both sides.
 git fetch -q ./.sync.bundle "+refs/heads/$3:refs/sync/incoming" \
   || git fetch -q "./.sync.bundle" "+refs/heads/$3:refs/sync/incoming"
-git checkout -q -f --detach "$2"
+git checkout -q -f "$2" 2>&1
 # Files that are not in the bundle (deleted upstream, or rsync leftovers) would otherwise sit
 # there and be picked up by vitest's globbing. Only untracked, ignored files are protected.
 git clean -q -fd -e node_modules -e dist -e .artifacts -e .cache
@@ -94,7 +94,7 @@ sync_windows() {
   # of the node/git directories (the same reason every command in this repo's Windows notes
   # spells the PATH out).
   "${sshcmd[@]}" "$WIN_SSH" \
-    "cmd /c \"set PATH=C:\\Program Files\\nodejs;C:\\Program Files\\Git\\cmd;%APPDATA%\\npm;%PATH% && cd /d $WIN_DIR && git fetch -q ./.sync.bundle +refs/heads/$BRANCH:refs/sync/incoming && git checkout -q -f --detach $SHA && git rev-parse --short HEAD\""
+    "cmd /c \"set PATH=C:\\Program Files\\nodejs;C:\\Program Files\\Git\\cmd;%APPDATA%\\npm;%PATH% && cd /d $WIN_DIR && git fetch -q ./.sync.bundle +refs/heads/$BRANCH:refs/sync/incoming && git checkout -q -f $SHA 2>&1 && git rev-parse --short HEAD\""
 }
 
 case "$TARGET" in
