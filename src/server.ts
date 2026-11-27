@@ -2716,7 +2716,27 @@ export class BridgeServer {
   private reportedModelFor(record: SessionRecord): { providerID: string; modelID: string } | undefined {
     const agent = this.agents.get(record.session.id);
     const options = agent?.configOptionsFor(record.acpSessionId);
-    return options ? modelFromConfigOptions(options) : undefined;
+    const fromOptions = options ? modelFromConfigOptions(options) : undefined;
+    if (fromOptions) return fromOptions;
+    // ★ An agent that reports models the ACP-STANDARD way has no `model` config option to read:
+    // `copilot --acp` puts everything in `models: {currentModelId, availableModels}` and a single
+    // `mode` config option. Falling through to the catalog's first entry therefore started every
+    // session on `auto` (Copilot Fusion) even though `currentModelId` said `deepseek-flash` — on
+    // macOS and Linux the catalog was ordered by `currentModelId` and hid it, on Windows the
+    // ordering did not apply and the cell reported `model acp/auto`. The standard field is the
+    // agent's own answer and belongs first.
+    const standard = record.acpSessionId ? agent?.standardModelsFor(record.acpSessionId) : undefined;
+    const current = standard?.currentModelId;
+    if (typeof current !== 'string' || current.length === 0) return undefined;
+    const entry = this.modelCatalog(record).models.find(
+      (model) => String(model['modelID'] ?? model['id']) === current,
+    );
+    if (entry) {
+      return { providerID: String(entry['providerID']), modelID: String(entry['modelID'] ?? entry['id']) };
+    }
+    // Not in the catalog yet (a `models` list that arrived without `configOptions`): still honour
+    // the agent rather than inventing `acp/default`.
+    return { providerID: PLACEHOLDER_BACKEND, modelID: current };
   }
 
   private defaultModelFor(record?: SessionRecord): { providerID: string; modelID: string } | undefined {
