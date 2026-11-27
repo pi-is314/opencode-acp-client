@@ -215,6 +215,15 @@ function discoverAgents() {
         ) ??
         ['gemini', '--acp'],
     },
+    {
+      // GitHub Copilot CLI. Its BYOK path is the legacy `COPILOT_PROVIDER_*` environment (see
+      // `copilot help providers-env`), NOT `~/.copilot/providers.json`: on an account without
+      // individual-model access the file route answers `only Copilot Fusion mode is available on
+      // your plan`, while the variables work and need no GitHub login. The four variables are read
+      // from the environment the matrix is launched with, so no credential lives in this script.
+      id: 'copilot',
+      command: ['copilot', '--acp'],
+    },
   ];
   return candidates;
 }

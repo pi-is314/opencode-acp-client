@@ -4426,7 +4426,15 @@ export class BridgeServer {
       if (!option) return { status: 204 };
       const choices = modeChoicesOf(option);
       if (choices.length === 0) return { status: 204 };
-      if (!choices.some((choice) => choice.value === wanted)) {
+      // ★ The client sends back the `id` we showed it, which is the shortened form for an agent
+      // whose mode values are URLs (`copilot --acp`). Translate back to the value the agent expects
+      // before validating, or every switch on such an agent would be refused as unknown.
+      const wantedValue = wanted
+        ? (choices.find((choice) => choice.value === wanted)?.value ??
+           choices.find((choice) => readableModeId(choice.value) === wanted)?.value ??
+           wanted)
+        : wanted;
+      if (!choices.some((choice) => choice.value === wantedValue)) {
         if (
           wanted === this.backendName() ||
           wanted === PLACEHOLDER_BACKEND ||
@@ -4440,13 +4448,14 @@ export class BridgeServer {
       }
       const current = modeFromConfigOptions(switchOptions);
       const previous = prevBeforeEnsure ?? current;
-      if (current !== wanted) {
-        await agent.setConfig(acpSessionId, String(option.id ?? option.configId ?? 'mode'), wanted);
-        this.log(`[bridge] mode -> ${wanted}`);
+      if (current !== wantedValue) {
+        await agent.setConfig(acpSessionId, String(option.id ?? option.configId ?? 'mode'), wantedValue);
+        this.log(`[bridge] mode -> ${wantedValue}`);
       } else {
-        this.log(`[bridge] /agent: ${wanted} is already selected; not calling the agent`);
+        this.log(`[bridge] /agent: ${wantedValue} is already selected; not calling the agent`);
       }
-      record.session.agent = wanted;
+      // The session keeps the SHORT form, so the footer never renders a URL.
+      record.session.agent = readableModeId(String(wantedValue));
       if (record.acpSessionId || this.sessionMap.acpIdFor(record.session.id)) {
         this.sessionMap.rememberMode(record.session.id, wanted);
         this.sessionMap.flush();
@@ -4541,8 +4550,15 @@ export class BridgeServer {
         : choices;
     // Omit explicit colors so the TUI derives consistent colors from the user's active theme.
     return ordered.map((choice) => ({
-      id: choice.value,
-      name: choice.name || choice.value,
+      // ★ The `id` is what the client SHOWS, so an agent that puts a URL in its mode value makes the
+      // footer read `Https://Agentclientprotocol.Com/Protocol/Session-Modes#Agent`. Measured with
+      // `copilot --acp`, whose `configOptions[mode].options[].value` are documentation links
+      // (`https://agentclientprotocol.com/protocol/session-modes#agent`) while `name` is the real
+      // label ("Agent"). The value is still what we must send back as the mode, so it is kept as a
+      // separate field rather than replaced.
+      id: readableModeId(choice.value),
+      ...(choice.value !== readableModeId(choice.value) ? { value: choice.value } : {}),
+      name: choice.name || readableModeId(choice.value),
       ...(typeof choice.description === 'string' && choice.description.trim()
         ? { description: choice.description }
         : {}),
@@ -4676,6 +4692,22 @@ export class BridgeServer {
       // No session has reached ACP yet. Fall back so the composer is not
       // silently dead while the first `session/new` settles.
       add(PLACEHOLDER_BACKEND, 'default', 'default');
+    }
+    // ★ The model the agent says it is USING comes first. `defaultModel()` takes the first real
+    // entry, and an agent's `availableModels` is only its menu order — measured with
+    // `copilot --acp`, which lists `auto` (Copilot Fusion) before `deepseek-flash` while
+    // `currentModelId` is `deepseek-flash`: every session therefore started on `auto`, and the
+    // matrix cell reported `model acp/auto` even though the BYOK variables had selected
+    // deepseek-flash. Same shape as the agent-mode list: order the list by the agent's own
+    // statement rather than by its menu.
+    const current = live
+      .map(({ record, agent }) =>
+        record.acpSessionId ? agent.standardModelsFor(record.acpSessionId)?.currentModelId : undefined,
+      )
+      .find((id) => typeof id === 'string' && id.length > 0);
+    if (typeof current === 'string') {
+      const first = models.findIndex((model) => String(model['modelID'] ?? model['id']) === current);
+      if (first > 0) models.unshift(...models.splice(first, 1));
     }
     return { models, providers: [...providers.values()] };
   }
@@ -5926,6 +5958,26 @@ function isEffortOption(option: SessionConfigOption): boolean {
 function isModeOption(option: SessionConfigOption): boolean {
   const optionId = option.id ?? option.configId;
   return option.category === 'mode' || optionId === 'mode';
+}
+
+/**
+ * A mode value reduced to something a footer can show.
+ *
+ * ACP only says a select option's `value` is a string; most agents use a slug (`plan`, `auto`), but
+ * `copilot --acp` uses documentation URLs. The client renders this as the current agent, so the URL
+ * is shortened to its `#fragment` (or last path segment) while the ORIGINAL value stays available
+ * for the switch, which is the one thing that must not change.
+ */
+function readableModeId(value: string): string {
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return value;
+  try {
+    const url = new URL(value);
+    const tail = (url.hash || url.pathname).replace(/^#/, '').split('/').filter(Boolean).pop();
+    if (tail) return tail;
+  } catch {
+    // Not a parseable URL after all; fall through to the value itself.
+  }
+  return value;
 }
 
 function modeChoicesOf(option: SessionConfigOption): SessionConfigSelectOption[] {

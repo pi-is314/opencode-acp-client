@@ -375,6 +375,13 @@ export class AcpClient extends EventEmitter<AcpEvents> {
     return [];
   }
 
+  /** The ACP-standard model list an agent reported for one session (`models: {...}`). */
+  standardModelsFor(sessionId: string):
+    | { currentModelId?: string; availableModels?: Array<{ modelId?: string; name?: string }> }
+    | undefined {
+    return this.catalogs.get(sessionId)?.standardModels;
+  }
+
   private anyStandardModels():
     | { currentModelId?: string; availableModels?: Array<{ modelId?: string; name?: string }> }
     | undefined {
