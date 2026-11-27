@@ -41,7 +41,7 @@ It depends on which capability the agent announces — the tab title tells you w
 1. **Every inbound request gets an answer.** An agent that asks something and hears nothing back
    waits forever; anything we do not support is refused explicitly so the agent can degrade.
 2. **Never assume a capability exists.** ACP is negotiated; the degradation rules are in
-   [docs/ACP-COMPAT.md](docs/ACP-COMPAT.md).
+   [ACP-COMPAT.md](ACP-COMPAT.md).
 3. **Prefer a noisy truth to a quiet guess.** A gap must be discoverable, not silently rendered
    as nothing.
 
