@@ -8,6 +8,67 @@ know what changed.
 
 ---
 
+## v0.3.0
+
+### Highlights
+
+#### ACP mode switching
+
+`Shift+Tab` and `/agents` now switch the ACP agent's own modes (`plan`, `accept-edits`, `auto`,
+`yolo`, …) instead of doing nothing. `agy acp` starts in `default` and used to ask permission for
+every tool call with no way out; `claude`, `codex`, `opencode acp` and `gemini --acp` all expose
+modes too. The selection is remembered per session, so `-c`, `--session` and reopening a tab put
+you back in the mode you left (PR #4, by [@poppyer9](https://github.com/poppyer9)).
+
+Both ACP surfaces are supported — `configOptions` and the older `SessionModeState` — and
+`configOptions` wins when an agent advertises both, which is what the spec says is coming.
+
+#### pi + pi-acp, measured on all three platforms
+
+[pi](https://github.com/badlogic/pi-mono) through the [pi-acp](https://github.com/svkozak/pi-acp)
+adapter is now in the matrix: **5 TUI builds × macOS 15.8.3 / Debian 12 / Windows 11, 15/15 PASS**.
+
+#### Usage accounting stops losing turns
+
+`PromptResponse.usage` is the agent's per-turn total. It was being emitted verbatim, so
+`session.get().tokens` fell back to whichever of two consecutive turns was smaller, and a mid-turn
+`usage_update` (with output and cache zeroed) wiped the accumulated cache reads. Totals accumulate
+now. Turns that exceeded the context window are no longer dropped — they used to vanish from the
+usage plugins entirely. The documented cost: the built-in context meter can read past 100% until a
+smaller turn settles (PR #5, by [@poppyer9](https://github.com/poppyer9)).
+
+#### Files you `@`-mention are forwarded
+
+Picking a file or a directory from the TUI's `@` menu used to fail with `400 attachment not
+supported` — which also made a home-screen submit read as "Failed to create session". Non-image
+`file://` URIs now travel as ACP `resource_link` blocks, which every agent must accept (PR #6, by
+[@poppyer9](https://github.com/poppyer9)).
+
+#### A cold `GET /api/agent` answers with real modes
+
+It used to fall back to a synthetic primary agent until some session happened to be warm, so a
+freshly started client saw no modes at all (PR #4).
+
+### Fixed
+
+- **A restored session no longer spins on a tool-only reply**: some agents open a turn with an
+  internal bookkeeping tool and end it there; the matrix now counts that as a turn rather than a
+  failure.
+- **`/api/project` and `/api/location` carry `worktree`**, which is what opencode desktop groups
+  sessions by.
+
+### Verified
+
+| Platform | The gate | Real-agent matrix |
+|---|---|---|
+| macOS 15.8.3 | ✅ | 5 builds × 8 agents |
+| Debian 12 | ✅ | **40/40 PASS** |
+| Windows 11 | ✅ | 39 PASS / 1 UNKNOWN |
+
+480 unit tests, 0 skipped.
+
+---
+
 ## v0.2.1
 
 ### Fixed
