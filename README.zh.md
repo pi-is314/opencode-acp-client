@@ -2,9 +2,7 @@
 
 > English: [README.md](README.md)
 
-> **不是 OpenCode 团队构建的，也与他们没有任何关联。** 这是一个社区维护的项目。
-> 这里说的 “opencode v2” 指本项目驱动的开源 opencode v2 TUI —— 它由你自己安装、作为独立程序运行，
-> 本项目不打包它，也不代表官方背书。
+![opencode v2 的 TUI，正在驱动一个 ACP agent](docs/images/home-screen.png)
 
 用 **opencode v2 的 TUI** 当界面，去驱动**任意 ACP agent**（一个终端
 **[ACP](https://agentclientprotocol.com) 客户端**）。
@@ -15,7 +13,9 @@ opencode v2 TUI ──HTTP + SSE──▶ opencode-acp-client ──ACP stdio─
                                   （ACP 客户端）
                                                                    dsh --profile acp /
                                                                    opencode acp / qwen --acp /
-                                                                   claude-acp / codex-acp …
+                                                                   claude-acp / codex-acp /
+                                                                   gemini --acp / agy acp /
+                                                                   pi-acp …
 ```
 
 **适合谁用**：喜欢、习惯了 opencode v2 的 TUI 的人 —— 熟悉它的按键、命令面板、会话 tab ——
@@ -33,8 +33,6 @@ curl -fsSL https://opencode.ai/v2/install | bash   # 官方安装脚本
 npm install -g @opencode/cli                      # 或者用 npm（包名是 @opencode/cli）
 ```
 
-装完确认：`opencode --version` 应输出 **v2.x**（v1 不行 —— 它的事件词汇完全不同，本工具会拒绝启动）。
-
 ### 第二步：装本工具
 
 需要 **Node ≥ 20**。
@@ -47,9 +45,6 @@ npm install -g opencode-acp-client
 npm install -g git+https://github.com/pi-is314/opencode-acp-client.git
 ```
 
-两种方式装出来的东西完全一样。方式二不经过 npm 源，适合想跟主干代码、或者 npm 装不上的情况；
-它会在安装时用 `typescript` 现场编译一次（约十几秒），所以需要能访问 npm 源去取编译器。
-
 装出两个命令名，指向同一入口：**`opencode-acp-client`**（主名）和 **`oc-acp-client`**（短 alias）。
 
 TUI 不在 `PATH` 上时，用 `$OPENCODE_BIN` 指过去；启动时会检查版本并报出来，而不是猜。
@@ -57,8 +52,6 @@ TUI 不在 `PATH` 上时，用 `$OPENCODE_BIN` 指过去；启动时会检查版
 ## 使用
 
 ```bash
-npm install -g opencode-acp-client
-
 oc-acp-client -- dsh --profile acp     # 用 dsh 的内置 ACP profile
 oc-acp-client -- qwen --acp            # 用 qwen-code
 oc-acp-client -- opencode acp          # 用我们的桥把 opencode acp 转成 opencode 自己的 http 协议 :)
@@ -84,8 +77,12 @@ opencode-acp-client -c                  # 当前目录最近的一条
 opencode-acp-client -s ses_xxxxx        # 指定会话
 ```
 
-`-s` / `-c` **不接受** agent 命令 —— 用哪个 agent 由会话映射表决定，CLI 替你启动它。
-id 从哪来？退出 TUI 时打印的 `Continue` 行已被改写成可直接复制的一条命令；也可以：
+`-s` / `-c` **不接受** `--` 加 agent 命令 —— 用哪个 agent 由会话映射表决定，CLI 替你启动它。
+会话 id 从哪来？退出 TUI 时打印的 `Continue` 行已被改写成可直接复制的一条命令：
+
+![退出 TUI 时打印的 Continue 行](docs/images/at-exit.png)
+
+也可以：
 
 ```bash
 python3 scripts/list-sessions.py            # 最新 20 条：id、多久之前、标题、目录
@@ -96,18 +93,6 @@ python3 scripts/list-sessions.py my-project # 按标题/目录/id 子串过滤
 tab 混在一个 TUI 里，正是「新 tab 显示成另一个 agent 的模型」的来源。所以 TUI 的 tab 布局按
 agent 隔离（`~/.opencode-acp-client/opencode/<agent-slug>/`），属于其它 agent 的会话会被拒绝
 （`404`）。`--` 只用于**新建**会话。
-
-## 实测过的 agent
-
-每行都是一次真跑，不是抄文档。
-
-| Agent | 命令 |
-|---|---|
-| dsh（内置 ACP profile） | `dsh --profile acp` |
-| opencode | `opencode acp` |
-| [qwen-code](https://github.com/QwenLM/qwen-code) | `qwen --acp` |
-| [claude-acp](https://github.com/agentclientprotocol/claude-agent-acp) | `npx -y @agentclientprotocol/claude-agent-acp` |
-| [codex-acp](https://github.com/agentclientprotocol/codex-acp) | `npx -y @agentclientprotocol/codex-acp` |
 
 ## 常用参数
 
@@ -140,27 +125,6 @@ agent 隔离（`~/.opencode-acp-client/opencode/<agent-slug>/`），属于其它
 **子命令**：`models` / `api` / `session` 走桥（答案属于你接的 agent），其余（`auth`、`plugin`、
 `upgrade`、`debug`…）原样直通给 opencode。`ps` 列出本工具启动过的桥进程。
 
-## 它写了哪些文件
-
-都在 `~/.opencode-acp-client/` 下。**不写原生 opencode v2 的安装目录**；会话映射表只存
-id、目录、标题和创建它的 agent argv —— **不存消息内容，也不存凭证**。
-
-| 路径 | 是什么 |
-|---|---|
-| `sessions.json` | 会话映射表（可见 id ↔ agent 自己的 id、目录、标题、agent）|
-| `opencode/<agent-slug>/` | 该 agent 的 TUI 状态与数据；配置（`tui.json`、插件、主题）与你自己的安装共享 |
-| `daemons/<pid>.json` | `ps` 用的注册表，正常退出即删 |
-
-## 恢复出来是什么样
-
-取决于 agent 宣告了哪个能力 —— tab 标题会告诉你是哪一种：
-
-- 有 `loadSession` → 回放历史，看得到原来的对话。
-- 只有 `sessionCapabilities.resume`（dsh 官方 `acp` profile 就是这样）→ ACP 的
-  `session/resume` **按规范不重放历史**，tab 是空的，但保留真名，并有一条 `◈ Notice`
-  说明原因。**上下文是否还在，规范不保证。**
-- 两个都没有 → 旧会话接不回来；tab 变成一个**新对话**，标题 `[new conversation] <目录名>`。
-
 ## 已实测的平台与版本
 
 **完整门控**（typecheck、单测、52 探针的 OpenAPI 校验、tmux 里的全部真 TUI 模式）在
@@ -168,21 +132,9 @@ id、目录、标题和创建它的 agent argv —— **不存消息内容，也
 macOS 上另有 v2.2.7 等中间版本。Windows 上跑 typecheck 与单测，TUI 未实测（没有 tmux）。
 16 个 release 逐个记录在 [docs/COMPAT-OPENCODE.zh.md](docs/COMPAT-OPENCODE.zh.md)。
 
-## 设计准则
-
-1. **每个入站请求都要回答。** agent 问了什么却听不到回音，会永远等下去；不支持的也要明确拒绝，让它能降级。
-2. **永不假设能力存在。** ACP 是协商出来的，降级规则见 [docs/ACP-COMPAT.zh.md](docs/ACP-COMPAT.zh.md)。
-3. **宁可吵闹的真相，不要安静的猜测。** 缺口要能被发现，而不是静默地什么都不渲染。
-
-## 已知缺口
-
-- 未实现的路由：pty、MCP auth、provider OAuth、worktree 变更、revert/share、大部分 `/tui/*` ——
-  它们返回格式正确的空信封，或一条记了日志的 404。真实会话用到的 355 个请求已全覆盖。
-- **其它 v2 客户端暂不推荐**：状态根是注入给我们自己拉起的 TUI 子进程的，别的客户端拿不到，
-  它的 tab 不按 agent 隔离（见上）。
-
 ## 文档
 
+- [docs/DETAILS.zh.md](docs/DETAILS.zh.md) — 它写了哪些文件、恢复出来是什么样、设计准则、已知缺口
 - [docs/ARCHITECTURE.zh.md](docs/ARCHITECTURE.zh.md) —— 进程模型与一个回合的时序
 - [docs/PROTOCOL.zh.md](docs/PROTOCOL.zh.md) —— 我们实现的 opencode v2 接口面
 - [docs/ACP-MATRIX.zh.md](docs/ACP-MATRIX.zh.md) —— ACP 方法矩阵、事件变体、故意偏离
