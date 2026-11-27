@@ -4496,9 +4496,20 @@ export class BridgeServer {
     if (!option) return [this.primaryAgent()];
     const choices = modeChoicesOf(option);
     if (choices.length === 0) return [this.primaryAgent()];
-    // Preserve the agent's canonical mode order and omit explicit colors so the TUI
-    // derives consistent colors from the user's active opencode theme.
-    return choices.map((choice) => ({
+    // ★ The mode the agent says it is IN comes first. opencode v2 has no "default agent" field to
+    // read here, so its composer takes the first entry of this list as the current one — and the
+    // agent's own `options` array is only its menu order. Measured with `qwen --acp`: qwen
+    // reports `modes.currentModeId: "auto"` and `configOptions[mode].currentValue: "auto"`, while
+    // its `options` begin with `plan`; the TUI therefore created sessions in plan mode
+    // ("Analyzes only, does not modify files or execute commands") and every tool call asked for
+    // permission. Ordering by `currentValue` makes the first entry agree with the agent.
+    const current = option.currentValue;
+    const ordered =
+      typeof current === 'string' && choices.some((choice) => choice.value === current)
+        ? [...choices].sort((a, b) => (a.value === current ? -1 : b.value === current ? 1 : 0))
+        : choices;
+    // Omit explicit colors so the TUI derives consistent colors from the user's active theme.
+    return ordered.map((choice) => ({
       id: choice.value,
       name: choice.name || choice.value,
       ...(typeof choice.description === 'string' && choice.description.trim()
