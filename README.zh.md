@@ -2,7 +2,7 @@
 
 > English: [README.md](README.md)
 
-<img src="docs/images/home-screen.png" alt="opencode v2 的 TUI，正在驱动一个 ACP agent" width="943">
+<img src="docs/images/home-screen.png" alt="opencode v2 的 TUI，正在驱动一个 ACP agent" width="640">
 
 用 **opencode v2 的 TUI** 当界面，去驱动**任意 ACP agent**（一个终端
 **[ACP](https://agentclientprotocol.com) 客户端**）。
@@ -80,7 +80,7 @@ opencode-acp-client -s ses_xxxxx        # 指定会话
 `-s` / `-c` **不接受** `--` 加 agent 命令 —— 用哪个 agent 由会话映射表决定，CLI 替你启动它。
 会话 id 从哪来？退出 TUI 时打印的 `Continue` 行已被改写成可直接复制的一条命令：
 
-<img src="docs/images/at-exit.png" alt="退出 TUI 时打印的 Continue 行" width="922">
+<img src="docs/images/at-exit.png" alt="退出 TUI 时打印的 Continue 行" width="640">
 
 也可以：
 
