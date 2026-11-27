@@ -14,7 +14,7 @@ import { removeDirSync } from './remove-dir.js';
 import { basename, dirname} from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 
 import { BridgeServer, derivedTitle, markTitle, projectIdFor } from '../src/server.js';
@@ -454,20 +454,77 @@ describe('fs/find and image attachments from the TUI', () => {
     expect(text).toContain('images:1');
   });
 
-  it('refuses a non-image file URI with a readable 400, never silently', async () => {
-    const url = await start('images');
+  it('forwards a non-image file:// attachment as an ACP resource_link block', async () => {
+    const url = await start('rich-turn', { FAKE_ACP_ECHO_PROMPT: '1' });
     const session = await createSession(url);
+    const fileUri = pathToFileURL(join(process.cwd(), 'package.json')).href;
     const response = await fetch(`${url}/api/session/${session}/prompt`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        text: 'see this',
-        files: [{ uri: `file://${join(process.cwd(), 'package.json')}`, name: 'package.json' }],
+        text: 'see @package.json',
+        files: [{ uri: fileUri, name: 'package.json' }],
       }),
     });
-    expect(response.status).toBe(400);
-    const body = (await response.json()) as { error?: string };
-    expect(body.error).toContain('attachment not supported');
+    expect(response.status).toBe(200);
+    await runTurn(url, session);
+    const reply = [...(await messages(url, session))]
+      .reverse()
+      .find((m) => m.type === 'assistant' && JSON.stringify(m.content ?? []).includes('ECHO'));
+    const text = (reply?.content ?? [])
+      .map((part) => (typeof part.text === 'string' ? part.text : ''))
+      .join('');
+    const echoed = JSON.parse(text.slice(text.indexOf('['))) as Array<Record<string, unknown>>;
+    expect(echoed).toContainEqual({
+      type: 'resource_link',
+      uri: fileUri,
+      name: 'package.json',
+    });
+  });
+
+  it('forwards directory file:// URIs (even with trailing slash) and preserves mimeType on resource_link', async () => {
+    const url = await start('rich-turn', { FAKE_ACP_ECHO_PROMPT: '1' });
+    const session = await createSession(url);
+    const dirUri = `${pathToFileURL(join(process.cwd(), 'src')).href}/`;
+    const fileUri = pathToFileURL(join(process.cwd(), 'package.json')).href;
+    const winDirUri = 'file://D:\\a\\repo\\src\\';
+    const response = await fetch(`${url}/api/session/${session}/prompt`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        text: 'check @src and @package.json',
+        files: [
+          { uri: dirUri },
+          { uri: fileUri, mime: 'application/json', name: 'package.json' },
+          { uri: winDirUri },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    await runTurn(url, session);
+    const reply = [...(await messages(url, session))]
+      .reverse()
+      .find((m) => m.type === 'assistant' && JSON.stringify(m.content ?? []).includes('ECHO'));
+    const text = (reply?.content ?? [])
+      .map((part) => (typeof part.text === 'string' ? part.text : ''))
+      .join('');
+    const echoed = JSON.parse(text.slice(text.indexOf('['))) as Array<Record<string, unknown>>;
+    expect(echoed).toContainEqual({
+      type: 'resource_link',
+      uri: dirUri,
+      name: 'src',
+    });
+    expect(echoed).toContainEqual({
+      type: 'resource_link',
+      uri: fileUri,
+      name: 'package.json',
+      mimeType: 'application/json',
+    });
+    expect(echoed).toContainEqual({
+      type: 'resource_link',
+      uri: winDirUri,
+      name: 'src',
+    });
   });
 });
 
