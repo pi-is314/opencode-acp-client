@@ -657,9 +657,10 @@ describe('a delegated agent must be recognisable as one', () => {
     // as a caption must keep its generic card. The gate is the name from `initialize`,
     // which survives npx, a local checkout path and a wrapper script.
     for (const other of ['DeepSeek Harness', 'Gemini CLI', 'Qwen Code', undefined]) {
-      expect(nameFor({ name: 'exec_command', title: 'Start subagent explorer', kind: 'other' }, other)).toBe(
-        'exec_command',
-      );
+      // ★ Not `exec_command`: the TUI renders an unknown name through its fallback
+      // (`${name} ${JSON.stringify(input)}`), so a shell tool is mapped to `shell` whatever agent
+      // sent it. What this loop proves is that the TITLE did not turn it into a subagent (`task`).
+      expect(nameFor({ name: 'exec_command', title: 'Start subagent explorer', kind: 'other' }, other)).toBe('shell');
     }
   });
 
@@ -671,7 +672,10 @@ describe('a delegated agent must be recognisable as one', () => {
     // Anchored: a longer tool name that contains the word is not a subagent.
     expect(nameFor({ name: 'subagent_manager', kind: 'other' })).toBe('subagent_manager');
     // A codex tool whose TITLE merely mentions a subagent is not one of its activity rows.
-    expect(nameFor({ name: 'exec_command', title: 'grep subagent logs', kind: 'read' })).toBe('exec_command');
+    // It is, however, a shell command: the TUI would render the name `exec_command` through its
+    // unknown-tool fallback (`${name} ${JSON.stringify(input)}`), so the row is mapped to `shell`.
+    // What this assertion still proves is that the TITLE is not consulted for the subagent decision.
+    expect(nameFor({ name: 'exec_command', title: 'grep subagent logs', kind: 'read' })).toBe('shell');
   });
 });
 

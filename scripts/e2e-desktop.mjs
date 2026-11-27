@@ -70,6 +70,8 @@ const REPO = process.env.OPENCODE_REPO ?? join(process.env.HOME ?? '', 'PycharmP
 const DESKTOP_DIR = join(REPO, 'packages', 'desktop');
 const DEV_APP = join(DESKTOP_DIR, 'node_modules', '.cache', 'opencode-dev');
 const DEBUG_PORT = Number(process.env.DESKTOP_DEBUG_PORT ?? 9222);
+/** A non-loopback address of this machine; the desktop treats such a server as remote. */
+const BRIDGE_HOST = process.env.BRIDGE_HOST ?? '10.249.91.185';
 
 let failed = 0;
 let passed = 0;
@@ -148,6 +150,20 @@ class Cdp {
       entry(message.result);
     };
     return client;
+  }
+
+  /** Any CDP method, not just Runtime.evaluate — the emulation commands live here. */
+  call(method, params = {}) {
+    const id = this.#id++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`CDP ${method} timed out`)), 30_000);
+      this.#pending.set(id, (result) => {
+        clearTimeout(timer);
+        if (result?.error) reject(new Error(`${method}: ${result.error.message}`));
+        else resolve(result?.result);
+      });
+      this.#ws.send(JSON.stringify({ id, method, params }));
+    });
   }
 
   eval(body) {
@@ -319,7 +335,18 @@ async function main() {
     const port = 9500 + Math.floor(Math.random() * 400);
     bridge = spawn(
       process.execPath,
-      [ENTRY, '--no-tui', '--bridge-port', String(port), workDir, '--', process.execPath, FAKE_AGENT],
+      // ★ Bind a NON-loopback address on purpose. `directoryPickerKind` makes the picker native
+      // only for a server whose host is `localhost` or `127.0.0.1`; on anything else it opens the
+      // web dialog, which CDP can drive. A bridge on the LAN address is therefore the one
+      // configuration where "add this project" is reachable from a test at all.
+      [
+        ENTRY,
+        '--no-tui',
+        '--bridge-host', BRIDGE_HOST,
+        '--bridge-port', String(port),
+        workDir,
+        '--', process.execPath, FAKE_AGENT,
+      ],
       {
         cwd: workDir,
         env: { ...process.env, FAKE_ACP_MODELS: '1', FAKE_ACP_REPLY: 'desktop-e2e-reply' },
@@ -702,6 +729,64 @@ async function main() {
       (line) => !line.includes('/api/session/'),
     ).length;
     console.log(`  … GET /api/session reached the bridge: ${sessionHits}`);
+
+    // ★ Add the bridge's project through the UI. This is the step the whole run was missing: the
+    // bridge answered `/api/project` all along, but the desktop's project tree is the CLIENT's own
+    // list, and a candidate only enters it through `home.project.add` — reachable from the
+    // "add project" button. With the bridge on a NON-loopback address the picker is the web dialog
+    // (`directoryPickerKind`), so the flow can be driven at all; on 127.0.0.1 it is a native macOS
+    // dialog that CDP cannot touch.
+    const projectDir = await fetch(`${bridgeUrl}/api/location`)
+      .then((r) => r.json())
+      .then((b) => b.directory)
+      .catch(() => undefined);
+    // ★ Narrow the window first. `home/route.tsx` renders the project **dropdown** only under
+    // `mobile()` (max-width: 767px), and that dropdown is the ONLY place a per-server
+    // "add project" control exists (`data-action="home-add-project-row"`). The wide layout has just
+    // the header button, which always calls `onChooseProject(props.servers[0])` — the desktop's own
+    // local server — so adding the bridge's project from it is impossible by construction.
+    const resized = await cdp
+      .call('Emulation.setDeviceMetricsOverride', { width: 720, height: 900, deviceScaleFactor: 0, mobile: false })
+      .then(() => 'ok')
+      .catch((error) => `failed: ${String(error).slice(0, 80)}`);
+    console.log('  … setDeviceMetricsOverride:', resized);
+    await sleep(2500);
+    const viewport = await cdp.eval('return { w: window.innerWidth, mobile: matchMedia("(max-width: 767px)").matches };').catch(() => ({}));
+    console.log('  … viewport:', JSON.stringify(viewport));
+
+    const openedPicker = await cdp
+      .eval(`
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const click = (el) => {
+          for (const type of ['pointerdown', 'pointerup']) el.dispatchEvent(new PointerEvent(type, { bubbles: true }));
+          el.click();
+        };
+        // The per-server control is the one that uses THAT server; the header button always uses
+        // servers[0], which here is the desktop's own local server. Prefer the row, and report what
+        // was found so a missing row is visible rather than silently falling back.
+        const rows = [...document.querySelectorAll('[data-action="home-add-project-row"]')];
+        const allActions = [...document.querySelectorAll('[data-action]')].map((x) => x.getAttribute('data-action'));
+        const header = document.querySelector('[data-action="home-add-project"]');
+        const button = rows[0] ?? header;
+        if (!button) return { clicked: false, reason: 'no add-project control' };
+        click(button);
+        await sleep(2500);
+        const dialog = document.querySelector('[role=dialog]');
+        const inputs = [...document.querySelectorAll('input')].map((i) => i.getAttribute('placeholder') || i.type).slice(0, 8);
+        return {
+          clicked: true,
+          which: rows[0] ? 'row' : 'header',
+          rowCount: rows.length,
+          actionsOnScreen: [...new Set(allActions)].slice(0, 12),
+          hasHeader: !!header,
+          dialog: !!dialog,
+          dialogText: dialog ? (dialog.innerText || '').slice(0, 300) : '',
+          inputs,
+          bodyTail: (document.body.innerText || '').slice(-300),
+        };
+      `)
+      .catch((error) => ({ error: String(error) }));
+    console.log('  … add project:', JSON.stringify(openedPicker), '| dir:', projectDir);
 
     const listed = await waitFor(async () => {
       const body = await cdp.eval(`

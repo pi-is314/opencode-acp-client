@@ -49,6 +49,41 @@ interface StreamPartState {
 
 /** Mirrors the single agent `/api/agent` advertises (ACP has no agent list). */
 
+/**
+ * The short form of a tool's input, for the client's `session.tool.input.ended`.
+ *
+ * ★ This text is the ROW'S VISIBLE CAPTION while the call streams, and the TUI also keeps the whole
+ * `input` record for the expanded body. Sending the raw input made a file write put the entire new
+ * file into the collapsed card: measured on `qwen --acp` writing a 300-line Go test, whose card
+ * read `WriteFile: Writing to …/jev_detect_method_test.go [content=package service\n\nimport ( …`
+ * and then showed the same content again when expanded.
+ *
+ * So: a string input is already a one-line caption (a shell command, a search pattern); an object
+ * keeps only its short, identifying fields. A field long enough to be a document — `content`,
+ * `newText`, `oldText`, anything over `MAX` characters — is dropped, and the caller sees the shape
+ * instead (`{path, content…}`) rather than the payload.
+ */
+function toolInputSummary(input: unknown): string {
+  if (input === undefined || input === null) return '{}';
+  if (typeof input === 'string') return input;
+  if (typeof input !== 'object') return String(input);
+  const MAX = 200;
+  const short: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    if (typeof value === 'string') {
+      short[key] = value.length > MAX ? `${value.slice(0, MAX)}…` : value;
+      continue;
+    }
+    if (value === null || typeof value !== 'object') {
+      short[key] = value;
+      continue;
+    }
+    const rendered = JSON.stringify(value);
+    short[key] = rendered !== undefined && rendered.length > MAX ? '…' : value;
+  }
+  return JSON.stringify(short);
+}
+
 export class AcpTranslator {
   /** Per session+message+kind cursor for the currently open streaming part. */
   private readonly openParts = new Map<string, StreamPartState>();
@@ -903,7 +938,8 @@ export class AcpTranslator {
     const title = typeof update['title'] === 'string' ? update['title'] : '';
     const looksLikeSubagent =
       SUBAGENT_NAME.test(reportedName) || (isCodex && SUBAGENT_VERB_TITLE.test(title));
-    const name = knownName ?? (looksLikeSubagent ? 'task' : reportedName);
+    const name =
+      knownName ?? (looksLikeSubagent ? 'task' : nativeToolName(reportedName, update['kind']));
     if (knownName === undefined) this.toolNames.set(callId, name);
 
     // Merge the input instead of replacing it. opencode's pending frame often carries
@@ -1032,7 +1068,7 @@ export class AcpTranslator {
           sessionID: record.session.id,
           assistantMessageID: messageId,
           id,
-          text: typeof normalized === 'string' ? normalized : JSON.stringify(normalized ?? {}),
+          text: toolInputSummary(normalized),
         },
         location: this.location,
       });
@@ -1354,6 +1390,57 @@ export function mapToolStatus(status: unknown): 'pending' | 'running' | 'complet
 
 /** Best-effort extraction of a tool's textual result from an ACP update. */
 /** The tool names agents use for a delegated agent, as measured (see `applyToolCall`). */
+/**
+ * The name opencode's TUI renders a tool card with.
+ *
+ * ★ The TUI picks its row component by NAME (`packages/tui/src/mini/tool.ts`: `write`, `edit`,
+ * `read`, `shell`, `grep`, …) and falls back to `${name} ${JSON.stringify(input)}` for anything it
+ * does not recognise. Measured with `qwen --acp`, whose file write is named `WriteFile`: the
+ * collapsed card read `WriteFile {"path":"…","content":"package service\n\nimport ( …"}`, i.e. the
+ * whole new file in the caption, and expanding it showed the same content again.
+ *
+ * ACP's `kind` is the portable answer — the spec defines it as the tool's category (`edit`, `read`,
+ * `search`, `execute`, `fetch`, `delete`, `move`) precisely so a client can pick a presentation
+ * without knowing the agent's vocabulary. So: keep a name the TUI already knows, otherwise map the
+ * kind, otherwise leave the agent's word alone (the fallback is honest, it is just not pretty).
+ *
+ * `edit` covers both "rewrite the file" and "patch part of it"; the agent's own name decides which,
+ * because only that distinguishes a whole-file write from an edit.
+ */
+const NATIVE_TOOL_NAMES = new Set([
+  'bash', 'shell', 'edit', 'write', 'read', 'list', 'glob', 'grep', 'webfetch', 'websearch',
+  'task', 'patch', 'batch', 'lsp', 'question', 'skill', 'invalid',
+]);
+
+function nativeToolName(reported: string, kind: unknown): string {
+  if (NATIVE_TOOL_NAMES.has(reported)) return reported;
+  // ★ A name that spells out what the tool DOES outranks a broad `kind`. `codex-acp` reports
+  // `exec_command` with `kind: "read"` — its shell wrapper reads files too — and mapping that to
+  // `read` rendered a command run as a file view. The TUI's own names win when the agent's word
+  // matches one of them semantically.
+  // `\b` does not fire between `exec` and `_` (`exec_command`), so the separators are explicit.
+  if (/(^|[^a-z])(exec|shell|bash|command|run)([^a-z]|$)/i.test(reported)) return 'shell';
+  if (/(^|[^a-z])(write|create|save|overwrite)([^a-z]|$)/i.test(reported)) return 'write';
+  switch (kind) {
+    case 'read':
+      return 'read';
+    case 'search':
+      return 'grep';
+    case 'execute':
+      return 'shell';
+    case 'fetch':
+      return 'webfetch';
+    case 'delete':
+    case 'move':
+      return 'patch';
+    case 'edit':
+      // A whole-file rewrite vs. an in-place change: `write`/`create`/`save` vs `edit`/`patch`.
+      return /\b(write|create|save|overwrite)\b/i.test(reported) ? 'write' : 'edit';
+    default:
+      return reported;
+  }
+}
+
 const SUBAGENT_NAME = /^(subagents?|task|agent)$/i;
 /** `codex-acp` verb-prefixes its subagent activity instead of naming the tool. */
 const SUBAGENT_VERB_TITLE = /^(start|interact with|interrupt|complete) subagent\b/i;
