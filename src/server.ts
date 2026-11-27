@@ -4158,17 +4158,25 @@ export class BridgeServer {
   }
 
   private applyAgentModeUpdate(record: SessionRecord, nextMode: string | undefined): void {
-    if (!nextMode || nextMode === record.session.agent || this.mutingModeUpdates.has(record.session.id)) {
+    // ★ The id is stored and reported in its SHORT form, the same one `agentCatalog` shows and
+    // `applyRequestedMode` accepts. `copilot --acp` announces its modes as documentation URLs
+    // (`…/session-modes#agent`), so comparing the raw id against the shortened `session.agent`
+    // never matched: every `current_mode_update` looked like a switch, and the transcript grew a
+    // `Switched agent from Agent to Https://…` line under every user message — alternating, because
+    // the next raw report then read as a switch back. The URL is only ever needed when SENDING it
+    // back to the agent, which `applyRequestedMode` does by translating from the short form.
+    const mode = nextMode ? readableModeId(nextMode) : undefined;
+    if (!mode || mode === record.session.agent || this.mutingModeUpdates.has(record.session.id)) {
       return;
     }
     const previousMode = record.session.agent;
-    record.session.agent = nextMode;
-    this.log(`[bridge] agent switched the mode -> ${nextMode}`);
+    record.session.agent = mode;
+    this.log(`[bridge] agent switched the mode -> ${mode}`);
     this.hub.emit({
       type: EVENT.agentSelected,
       data: {
         sessionID: record.session.id,
-        agent: nextMode,
+        agent: mode,
         ...(previousMode ? { previous: previousMode } : {}),
       },
       location: this.location,
