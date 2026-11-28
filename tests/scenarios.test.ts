@@ -4933,7 +4933,15 @@ describe('the project surfaces a client builds its sidebar from', () => {
     // ★ The two must agree. `/var/...` and `/private/var/...` hash differently, and the location
     // used to hash the raw launch string while this route hashed the realpath: same workspace,
     // two ids, and a client looking up the location's id found no project.
-    expect(location.project?.id).toBe(projects[0]!['id']);
+    // ★ Look the location's project UP rather than assuming it is first. The list also carries the
+    // directories the session map remembers — offering only the ones with a live session made the
+    // desktop's project tree empty whenever it was remembering a different directory — so the
+    // launch directory is no longer guaranteed to sort first.
+    const matching = projects.find(
+      (project) => canonicalPath(String(project['directory'])) === canonicalPath(dir),
+    );
+    expect(matching).toBeDefined();
+    expect(location.project?.id).toBe(matching!['id']);
     expect(canonicalPath(String(location.project?.directory))).toBe(canonicalPath(dir));
   });
 });

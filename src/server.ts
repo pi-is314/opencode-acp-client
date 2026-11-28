@@ -617,6 +617,7 @@ export class BridgeServer {
       }
       if (catalog?.providerID && catalog.modelID && this.isRealModel(catalog as Record<string, unknown>)) {
         record.model = { providerID: catalog.providerID, modelID: catalog.modelID };
+        this.syncSessionModel(record);
       }
       if (requestedAgent) {
         await this.applyRequestedMode(record, requestedAgent, {
@@ -1302,7 +1303,31 @@ export class BridgeServer {
       return;
     }
     if (path === '/api/config') {
-      json([]);
+      // ★ An EMPTY array is schema-valid (`Config.Entry[]`) but the desktop's new-session path reads
+      // `info.model` and friends out of it, calls `.some(...)` on a field it did not find, and throws
+      // `Cannot read properties of undefined (reading 'some')` — the click does nothing and the
+      // renderer logs repeat it. Measured against a real `opencode serve`: its `/api/config` answers
+      // the user's config DOCUMENT (`{type:"document", path, info:{model, providers, ...}}`), not an
+      // empty list.
+      const models = this.modelCatalog().models.filter((model) => this.isRealModel(model));
+      const first = models[0];
+      json([
+        {
+          type: 'document',
+          path: join(homedir(), '.config', 'opencode', 'opencode.json'),
+          info: {
+            $schema: 'https://opencode.ai/config.json',
+            ...(first
+              ? {
+                  model: {
+                    providerID: String(first['providerID']),
+                    model: String(first['modelID'] ?? first['id']),
+                  },
+                }
+              : {}),
+          },
+        },
+      ]);
       return;
     }
     if (path === '/api/config/shell') {
@@ -1326,9 +1351,28 @@ export class BridgeServer {
       // measured on opencode desktop, which asked for `/api/project`, `/api/location` and
       // `/api/vcs` and then stopped. Derive the list from the sessions we actually hold (plus the
       // launch directory), deduplicated by directory, in the same shape `location.project` uses.
+      // ★ Every directory the map remembers, not just the ones with a session in memory.
+      // The desktop keeps its own `selection.directory`; if the list it is given does not contain
+      // that directory it shows NOTHING — the whole project tree, not only the missing row — even
+      // though every request succeeds. Measured: the bridge answered `/api/project` with `charon`
+      // alone (the only directory with a live session), the desktop was still remembering
+      // `l4_benchmark` from an earlier pick, and the sidebar stayed empty until the project was
+      // selected again by hand. The map has rows for every directory this agent has ever run in,
+      // so it is the honest list to offer.
       const directories = new Set<string>([this.options.directory]);
       for (const record of this.state.all()) {
         if (record.directory) directories.add(record.directory);
+      }
+      // ★ Only rows written by THIS agent. The map is shared by every agent on the machine, and a
+      // dsh workspace has no business appearing in an opencode tab's project tree — the same reason
+      // a restore refuses an entry that names a different agent.
+      const binding = this.agentBinding();
+      for (const [, entry] of this.sessionMap.entries()) {
+        if (!entry.directory) continue;
+        if (entry.agent && (entry.agent.command !== binding.command || entry.agent.args.join('\u0000') !== binding.args.join('\u0000'))) {
+          continue;
+        }
+        directories.add(entry.directory);
       }
       json(
         [...directories].sort().map((directory) => ({
@@ -1343,6 +1387,17 @@ export class BridgeServer {
           // "这里还没有内容".
           worktree: directory,
           expanded: true,
+          // ★ `Project` in the published spec REQUIRES `sandboxes` (`string[]`) and `time`
+          // (`{created, updated, active}`); the desktop reads them without a guard. Missing
+          // `sandboxes` crashed it on startup with
+          //   TypeError: Cannot read properties of undefined (reading 'some')
+          //     at [as forDirectory]  — `v().find(e => … || e.sandboxes.some(…)`
+          // (renderer bundle `main-*.js`, the `forDirectory` helper), and the click that follows
+          // does nothing. The desktop's own type is `Partial<Project> & { worktree: string }`, so
+          // TypeScript never warned; only the running app did. An ACP bridge has no sandboxes — a
+          // session runs in one directory — so the honest value is an empty list.
+          sandboxes: [] as string[],
+          time: { created: 0, updated: 0, active: 0 },
         })),
       );
       return;
@@ -2453,6 +2508,7 @@ export class BridgeServer {
         if (current && current.providerID === providerID && current.modelID === modelID) {
           this.log(`[bridge] /model: ${providerID}/${modelID} is already selected; not calling the agent`);
           record.model = { providerID, modelID };
+          this.syncSessionModel(record);
           await this.applyVariant(record, agent, acpSessionId, variant);
           noContent();
           return;
@@ -2507,6 +2563,7 @@ export class BridgeServer {
         });
         await agent.setConfig(acpSessionId, 'model', wanted ?? `${providerID}/${modelID}`);
         record.model = { providerID, modelID };
+        this.syncSessionModel(record);
         this.log(`[bridge] model -> ${providerID}/${modelID}`);
         await this.applyVariant(record, agent, acpSessionId, variant);
       } catch (err) {
@@ -2701,6 +2758,22 @@ export class BridgeServer {
    * session got no model, the TUI submitted the placeholder, and the run reported
    * "Failed to switch model: Internal error" against an agent that had answered perfectly.
    */
+  /**
+   * Mirror the internal model onto the session object clients read.
+   *
+   * `Session.Info` in the published schema does not require `model`, but a real `opencode serve`
+   * sends `{id, providerID, variant}`, and the desktop's session schema decodes it — with the field
+   * absent, sending a prompt made the renderer log `Uncaught SchemaError` and show its crash screen
+   * while the bridge had already answered 200 and stored the turn. Called from every place that
+   * learns which model a session is on.
+   */
+  private syncSessionModel(record: SessionRecord): void {
+    const model = record.model;
+    record.session.model = model
+      ? { id: model.modelID, providerID: model.providerID }
+      : undefined;
+  }
+
   private isRealModel(model: Record<string, unknown>): boolean {
     const id = String(model['modelID'] ?? model['id'] ?? '');
     if (id === '' || id === 'default') return false;
@@ -2777,6 +2850,7 @@ export class BridgeServer {
       if (!real) continue;
       const previous = current;
       record.model = { providerID: real.providerID, modelID: real.modelID };
+      this.syncSessionModel(record);
       this.log(`[bridge] session ${record.session.id} adopted model ${real.providerID}/${real.modelID}`);
       this.hub.emit({
         type: EVENT.modelSelected,

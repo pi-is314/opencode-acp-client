@@ -73,6 +73,15 @@ export interface Session {
    */
   location: LocationRef;
   projectID: string;
+  /**
+   * The model this session runs on, in the shape a real `opencode serve` reports:
+   * `{id, providerID, variant?}`. The published schema does not require it, but the desktop's
+   * session schema decodes it and the renderer threw `SchemaError` on the session list right after
+   * a prompt — measured against `ai.opencode.desktop.dev`, with the bridge answering the prompt
+   * 200 and the conversation itself intact. Omitted until a real model is known, so the
+   * placeholder never reaches a client.
+   */
+  model?: { id: string; providerID: string; variant?: string };
   /** MoneyUSD is just a number. */
   cost: number;
   tokens: TokenUsageInfo;
