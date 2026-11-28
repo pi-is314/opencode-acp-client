@@ -359,6 +359,10 @@ async function main() {
           FAKE_ACP_REPLY: 'desktop-e2e-reply',
           FAKE_ACP_TOOL: '1',
           FAKE_ACP_PLAN: '1',
+          // ★ The permission dialog is exercised only on request (`MODE=permission`). Turning it on
+          // unconditionally makes the agent stop for approval during the FIRST turn, which stalls
+          // every check after it — measured: three failures that were all this one switch.
+          ...(process.env.MODE === 'permission' ? { FAKE_ACP_PERMISSION: 'allow' } : {}),
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       },
@@ -951,9 +955,15 @@ async function main() {
       return document.body.innerText;
     `);
     // `you said` is the AGENT's own sentence; the user's row is `hello from desktop e2e`.
-    /desktop-e2e-reply|you said/i.test(String(sent))
-      ? ok("the agent's reply rendered in the desktop")
-      : bad(`no reply on screen (${String(sent).slice(0, 140)})`);
+    const PERMISSION_MODE = process.env.MODE === 'permission';
+    if (/desktop-e2e-reply|you said/i.test(String(sent))) {
+      ok("the agent's reply rendered in the desktop");
+    } else if (PERMISSION_MODE) {
+      // The agent is waiting for approval, which is exactly what this mode is here to check.
+      console.log('  … no reply yet: the agent is waiting for the permission dialog');
+    } else {
+      bad(`no reply on screen (${String(sent).slice(0, 140)})`);
+    }
 
     // ---------------------------------------------------------------- the rest of the desk
     //
@@ -1045,86 +1055,140 @@ async function main() {
       .catch(() => '[]');
     console.log('  … composer controls:', String(controls).slice(0, 500));
 
-    // ---- the agent switcher. There is no agent button in the composer: the desktop exposes it as
-    // `mod+.` / the `/agent` slash command (`composer/commands.tsx`: id `agent.cycle`, keybind
-    // `mod+.`, slash `agent`), which walks the same list the TUI's Shift+Tab does. Drive the slash
-    // command and grade it from the BRIDGE — `session.agent` is the authoritative record — with the
-    // screen as the second opinion.
-    const agentOf = () =>
-      fetch(`${bridgeUrl}/api/session/${session.id}`)
-        .then((r) => r.json())
-        .then((body) => body?.data?.agent ?? '')
-        .catch(() => '');
-    const agentBefore = await agentOf();
-    const cycled = await cdp
-      .eval(`
-        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-        const editor = [...document.querySelectorAll('[contenteditable=true]')].find((el) => el.isContentEditable);
-        if (!editor) return { ok: false, reason: 'no composer' };
-        editor.focus();
-        editor.textContent = '/agent';
-        editor.dispatchEvent(new InputEvent('input', { bubbles: true, data: '/agent' }));
-        await sleep(1500);
-        for (const type of ['keydown', 'keypress', 'keyup']) {
-          editor.dispatchEvent(new KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-        }
-        await sleep(2500);
-        return { ok: true, screen: document.body.innerText.slice(0, 400) };
-      `)
-      .catch((error) => ({ ok: false, reason: String(error) }));
-    const agentAfter = await agentOf();
-    if (!cycled.ok) {
-      bad(`the agent cycle could not run: ${cycled.reason}`);
-    } else if (agentAfter && agentBefore && agentAfter !== agentBefore) {
-      ok(`/agent moved the session from ${agentBefore} to ${agentAfter}`);
-    } else if (/plan|default|accept|auto|yolo|agent/i.test(String(cycled.screen))) {
-      ok('the agent picker opens from the composer');
-    } else {
-      bad(`/agent opened nothing (saw ${JSON.stringify(String(cycled.screen).slice(0, 120))})`);
+    if (PERMISSION_MODE) {
+      console.log('  … MODE=permission: skipping the conversation checks that need a finished turn');
     }
 
-    // ---- the todo/plan sidebar. The ACP `plan` update has no opencode v2 surface of its own, so
-    // this is the check that says whether a plan the agent sends reaches the desk at all. Enable
-    // it in the fake agent and send another prompt; the entries should then name themselves.
-    const planTurn = await cdp
-      .eval(`
-        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-        const editor = [...document.querySelectorAll('[contenteditable=true]')].find((el) => el.isContentEditable);
-        if (!editor) return { ok: false, reason: 'no composer' };
-        editor.focus();
-        editor.textContent = 'what is the plan?';
-        editor.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'what is the plan?' }));
-        await sleep(600);
-        for (const type of ['keydown', 'keypress', 'keyup']) {
-          editor.dispatchEvent(new KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-        }
-        await sleep(6000);
-        return { ok: true, screen: document.body.innerText.slice(0, 800) };
-      `)
-      .catch((error) => ({ ok: false, reason: String(error) }));
-    const planScreen = String(planTurn.screen ?? '');
-    if (!planTurn.ok) {
-      bad(`the plan turn could not run: ${planTurn.reason}`);
-    } else if (/first|second/i.test(planScreen)) {
-      ok("the agent's plan entries reach the desktop");
-    } else if (/todo|plan/i.test(planScreen)) {
-      ok('the desktop shows a plan/todo surface');
+    if (PERMISSION_MODE) {
+      // Only the dialog is graded in this mode; the rest needs a turn that finishes.
+      console.log("  … MODE=permission: the conversation checks are skipped");
     } else {
-      console.log('  … no plan surface visible (the fake agent needs FAKE_ACP_PLAN=1 for this turn)');
+      // ---- the agent switcher. There is no agent button in the composer: the desktop exposes it as
+      // `mod+.` / the `/agent` slash command (`composer/commands.tsx`: id `agent.cycle`, keybind
+      // `mod+.`, slash `agent`), which walks the same list the TUI's Shift+Tab does. Drive the slash
+      // command and grade it from the BRIDGE — `session.agent` is the authoritative record — with the
+      // screen as the second opinion.
+      const agentOf = () =>
+        fetch(`${bridgeUrl}/api/session/${session.id}`)
+          .then((r) => r.json())
+          .then((body) => body?.data?.agent ?? '')
+          .catch(() => '');
+      const agentBefore = await agentOf();
+      const cycled = await cdp
+        .eval(`
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+          const editor = [...document.querySelectorAll('[contenteditable=true]')].find((el) => el.isContentEditable);
+          if (!editor) return { ok: false, reason: 'no composer' };
+          editor.focus();
+          editor.textContent = '/agent';
+          editor.dispatchEvent(new InputEvent('input', { bubbles: true, data: '/agent' }));
+          await sleep(1500);
+          for (const type of ['keydown', 'keypress', 'keyup']) {
+            editor.dispatchEvent(new KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+          }
+          await sleep(2500);
+          return { ok: true, screen: document.body.innerText.slice(0, 400) };
+        `)
+        .catch((error) => ({ ok: false, reason: String(error) }));
+      const agentAfter = await agentOf();
+      if (!cycled.ok) {
+        bad(`the agent cycle could not run: ${cycled.reason}`);
+      } else if (agentAfter && agentBefore && agentAfter !== agentBefore) {
+        ok(`/agent moved the session from ${agentBefore} to ${agentAfter}`);
+      } else if (/plan|default|accept|auto|yolo|agent/i.test(String(cycled.screen))) {
+        ok('the agent picker opens from the composer');
+      } else {
+        bad(`/agent opened nothing (saw ${JSON.stringify(String(cycled.screen).slice(0, 120))})`);
+      }
+
+      // ---- the todo/plan sidebar. The ACP `plan` update has no opencode v2 surface of its own, so
+      // this is the check that says whether a plan the agent sends reaches the desk at all. Enable
+      // it in the fake agent and send another prompt; the entries should then name themselves.
+      const planTurn = await cdp
+        .eval(`
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+          const editor = [...document.querySelectorAll('[contenteditable=true]')].find((el) => el.isContentEditable);
+          if (!editor) return { ok: false, reason: 'no composer' };
+          editor.focus();
+          editor.textContent = 'what is the plan?';
+          editor.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'what is the plan?' }));
+          await sleep(600);
+          for (const type of ['keydown', 'keypress', 'keyup']) {
+            editor.dispatchEvent(new KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+          }
+          await sleep(6000);
+          return { ok: true, screen: document.body.innerText.slice(0, 800) };
+        `)
+        .catch((error) => ({ ok: false, reason: String(error) }));
+      const planScreen = String(planTurn.screen ?? '');
+      if (!planTurn.ok) {
+        bad(`the plan turn could not run: ${planTurn.reason}`);
+      } else if (/first|second/i.test(planScreen)) {
+        ok("the agent's plan entries reach the desktop");
+      } else if (/todo|plan/i.test(planScreen)) {
+        ok('the desktop shows a plan/todo surface');
+      } else {
+        console.log('  … no plan surface visible (the fake agent needs FAKE_ACP_PLAN=1 for this turn)');
+      }
+
+      // ---- the model picker reads the bridge's catalog, not a placeholder.
+      const modelOpened = await press('模型');
+      await sleep(1500);
+      const modelScreen = await screen();
+      if (modelOpened === 'clicked') {
+        const named = /fake\/model-1|codemaker|deepseek|model-1/i.test(modelScreen);
+        named ? ok('the model picker lists the bridge catalog') : bad('the model picker listed no real model');
+      } else {
+        console.log('  … no model control matched by label; the composer shows it inline');
+      }
+
+      // ---- the sidebar's own actions: a new session from the project row opens a composer.
     }
 
-    // ---- the model picker reads the bridge's catalog, not a placeholder.
-    const modelOpened = await press('模型');
-    await sleep(1500);
-    const modelScreen = await screen();
-    if (modelOpened === 'clicked') {
-      const named = /fake\/model-1|codemaker|deepseek|model-1/i.test(modelScreen);
-      named ? ok('the model picker lists the bridge catalog') : bad('the model picker listed no real model');
+    // ---- the permission dialog. `FAKE_ACP_PERMISSION=allow` makes the agent ask before it runs a
+    // tool; the bridge turns that into `/api/permission/request`, and the desktop has to put a
+    // decision in front of the user. This is the one place where doing nothing has a cost — the
+    // agent is blocked until an answer arrives — so a silent failure here would hang every turn.
+    const permPending = await fetch(`${bridgeUrl}/api/permission/request`)
+      .then((r) => r.json())
+      .then((body) => (body?.data ?? []).length)
+      .catch(() => 0);
+    if (permPending > 0) {
+      // The dialog can arrive *during* an earlier turn and block it, so give the turn time to
+      // reach the agent's request before looking, and treat the whole block as informational when
+      // the desk is mid-conversation.
+      await sleep(3000);
+      const asked = await waitFor(
+        async () => (/允许|拒绝|Allow|Reject|permission/i.test(await screen()) ? true : undefined),
+        30_000,
+      );
+      if (asked) {
+        ok('the permission request reaches the desktop as a dialog');
+        // Answer it; leaving it pending is what would hang the next turn.
+        const answered = await cdp
+          .eval(`
+            const el = [...document.querySelectorAll('button')].find((b) => /允许|Allow/.test((b.innerText || '') + (b.getAttribute('aria-label') || '')));
+            if (!el) return 'no allow button';
+            for (const type of ['pointerdown', 'pointerup']) el.dispatchEvent(new PointerEvent(type, { bubbles: true }));
+            el.click();
+            return 'allow';
+          `)
+          .catch((error) => String(error));
+        await sleep(2000);
+        const left = await fetch(`${bridgeUrl}/api/permission/request`)
+          .then((r) => r.json())
+          .then((body) => (body?.data ?? []).length)
+          .catch(() => -1);
+        answered !== 'no allow button' && left === 0
+          ? ok('answering the dialog releases the agent')
+          : bad(`the permission answer did not land (click=${answered}, pending=${left})`);
+      } else {
+        bad('a permission request was pending and the desktop showed no dialog');
+      }
     } else {
-      console.log('  … no model control matched by label; the composer shows it inline');
+      console.log('  … no permission request in this run (the fake agent asks under FAKE_ACP_PERMISSION)');
     }
 
-    // ---- the sidebar's own actions: a new session from the project row opens a composer.
     const newSession = await press('新建会话');
     await sleep(2500);
     const afterNew = await screen();
