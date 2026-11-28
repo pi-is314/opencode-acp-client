@@ -349,21 +349,7 @@ async function main() {
       ],
       {
         cwd: workDir,
-        // FAKE_ACP_TOOL makes the agent call a tool, which is the only way the desktop's tool
-        // CARD is exercised; without it this run proves the composer and nothing else.
-        // FAKE_ACP_TOOL exercises the tool card; FAKE_ACP_PLAN sends a plan update, which is the only
-        // thing that can put entries in the todo surface.
-        env: {
-          ...process.env,
-          FAKE_ACP_MODELS: '1',
-          FAKE_ACP_REPLY: 'desktop-e2e-reply',
-          FAKE_ACP_TOOL: '1',
-          FAKE_ACP_PLAN: '1',
-          // ★ The permission dialog is exercised only on request (`MODE=permission`). Turning it on
-          // unconditionally makes the agent stop for approval during the FIRST turn, which stalls
-          // every check after it — measured: three failures that were all this one switch.
-          ...(process.env.MODE === 'permission' ? { FAKE_ACP_PERMISSION: 'allow' } : {}),
-        },
+        env: { ...process.env, FAKE_ACP_MODELS: '1', FAKE_ACP_REPLY: 'desktop-e2e-reply' },
         stdio: ['ignore', 'pipe', 'pipe'],
       },
     );
@@ -472,11 +458,7 @@ async function main() {
     // straight after "added" hit an empty tree, while the same click after the tree had painted
     // listed the session. So: go back, wait for the row to appear, then expand it — polling the
     // WHOLE path each attempt so a slow paint cannot be mistaken for a missing session.
-    // ★ Built from the URL the bridge actually serves: the harness binds a NON-loopback address on
-    // purpose (`directoryPickerKind` opens the web picker only for a remote server), so a hardcoded
-    // `127\.0\.0\.1:\d+` matched nothing while the row was right there on screen.
-    const bridgeHost = new URL(bridgeUrl).host;
-    const sidebarRow = new RegExp(bridgeHost.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const sidebarRow = /127\.0\.0\.1:\d+/;
     await cdp.eval(`
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const text = (el) => (el.innerText || '').trim();
@@ -495,30 +477,6 @@ async function main() {
       return typeof body === 'string' && sidebarRow.test(body) ? body : undefined;
     }, 30_000);
     rowPainted ? ok('the sidebar lists the new server') : bad('the sidebar never listed the new server');
-
-    // ★ CLICK THE BRIDGE'S ROW — this is what selects the server, and the session query is gated
-    // on a selection, not on the row existing. Measured by hand in the same desktop: adding the
-    // server left `selected: false` on the bridge row until that row was clicked, and only then did
-    // `/api/session` run against it. Writing `home.selection` into localStorage (the fallback below)
-    // looked right on read-back and still left the row unselected, so runtime state is what counts.
-    const selected = await cdp
-      .eval(`
-        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-        const want = ${JSON.stringify(bridgeHost)};
-        const click = (el) => {
-          for (const type of ['pointerdown', 'pointerup']) el.dispatchEvent(new PointerEvent(type, { bubbles: true }));
-          el.click();
-        };
-        const rows = [...document.querySelectorAll('[data-action="home-project-new-session"], [data-action="home-server-collapse"], button')];
-        const row = rows.find((el) => (el.innerText || '').includes(want));
-        if (!row) return { clicked: false, reason: 'row not found' };
-        click(row);
-        await sleep(3000);
-        return { clicked: true, text: (row.innerText || '').slice(0, 40) };
-      `)
-      .catch((error) => ({ error: String(error) }));
-    console.log('  … clicked the bridge row:', JSON.stringify(selected));
-    await sleep(6000);
 
     // ★ Let the app SETTLE before expanding. Measured side by side: adding the server, waiting,
     // and THEN clicking the group made the desktop fetch
@@ -875,27 +833,14 @@ async function main() {
           (globalThis).__flips = flips;
           await sleep(4000);
           // a second pass: the first click can land before the tree has painted
-          // The sidebar renders a session's TITLE, not its id; accept either so the retry pass
-          // recognises a row that is already there under its name.
-          const ident = [session.id, session.title, String(session.directory ?? '').split(/[\\/]/).filter(Boolean).pop()].filter(Boolean);
-          if (!ident.some((value) => document.body.innerText.includes(value))) {
+          if (!document.body.innerText.includes(session.id)) {
             const again = rows().find((r) => text(r).includes(hostPort));
             if (again) { click(focusButton(again)); await sleep(3000); }
           }
         }
         return document.body.innerText;
       `);
-      // ★ The sidebar can label a session with its title, its id, OR the directory's basename
-      // (what a session created without a name shows). Matching only the id missed rows that were
-      // plainly on screen: measured `body text: "… New session / oac-desktop-5M20Dl"` with
-      // `selected: true` on the bridge row and both of the first two lookups negative.
-      const base = String(session.directory ?? '').split(/[\\/]/).filter(Boolean).pop() ?? '';
-      const identifiable = [session.id, session.title, base].filter(
-        (value) => typeof value === 'string' && value.length > 0,
-      );
-      return typeof body === 'string' && identifiable.some((value) => body.includes(value))
-        ? body
-        : undefined;
+      return typeof body === 'string' && body.includes(session.id) ? body : undefined;
     }, 60_000);
     if (listed) ok(`the session ${session.id} is listed under the new server`);
     else {
@@ -904,13 +849,6 @@ async function main() {
       bad(`the session never appeared in the sidebar (bridge saw: ${bridgeRoutes().join(' ; ') || 'no requests'})`);
       console.log(`    sidebar was:\n${String(dump).split('\n').map((line) => `      | ${line}`).join('\n')}`);
     }
-
-    // The three spellings, computed once and reused inside the page script below.
-    const identJson = JSON.stringify(
-      [session.id, session.title, String(session.directory ?? '').split(/[\\/]/).filter(Boolean).pop()].filter(
-        (value) => typeof value === 'string' && value.length > 0,
-      ),
-    );
 
     const sent = await cdp.eval(`
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -921,25 +859,13 @@ async function main() {
       // back out of settings, then open the session
       const back = [...document.querySelectorAll('button')].find((b) => /^(Back to app|返回应用)$/.test((b.innerText || '').trim()));
       if (back) { click(back); await sleep(1500); }
-      // Same three spellings the sidebar may label a session with (see the check above).
-      const ident = ${identJson};
-      const row = [...document.querySelectorAll('button,[role=button]')].find((b) =>
-        ident.some((value) => (b.innerText || '').includes(value)),
-      );
+      const row = [...document.querySelectorAll('button,[role=button]')].find((b) => (b.innerText || '').includes(${JSON.stringify(session.id)}));
       if (!row) return 'session row not found';
       click(row);
-      // ★ Wait for the composer instead of assuming 2.5s is enough. Opening a session re-renders
-      // the whole view and the editor is mounted last; a fixed sleep reported "no composer" on a
-      // session that was already open (measured with a real click on the row).
-      let editor;
-      for (let attempt = 0; attempt < 40; attempt += 1) {
-        editor =
-          document.querySelector('[role=textbox][contenteditable=true]') ||
-          [...document.querySelectorAll('[contenteditable=true]')].find((el) => el.isContentEditable);
-        if (editor) break;
-        await sleep(500);
-      }
-      if (!editor) return 'no composer after 20s';
+      await sleep(2500);
+      // the composer IS contenteditable=true (also role=textbox) — the modern shell
+      const editor = document.querySelector('[role=textbox][contenteditable=true]') || document.querySelector('[contenteditable=true]');
+      if (!editor) return 'no composer';
       editor.focus();
       editor.textContent = 'hello from desktop e2e';
       editor.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'hello from desktop e2e' }));
@@ -955,285 +881,9 @@ async function main() {
       return document.body.innerText;
     `);
     // `you said` is the AGENT's own sentence; the user's row is `hello from desktop e2e`.
-    const PERMISSION_MODE = process.env.MODE === 'permission';
-    if (/desktop-e2e-reply|you said/i.test(String(sent))) {
-      ok("the agent's reply rendered in the desktop");
-    } else if (PERMISSION_MODE) {
-      // The agent is waiting for approval, which is exactly what this mode is here to check.
-      console.log('  … no reply yet: the agent is waiting for the permission dialog');
-    } else {
-      bad(`no reply on screen (${String(sent).slice(0, 140)})`);
-    }
-
-    // ---------------------------------------------------------------- the rest of the desk
-    //
-    // The checks above prove a prompt goes out and an answer comes back. These drive the parts of
-    // the UI a person actually touches — a tool card, the agent switcher, the model picker, the
-    // sidebar's own actions — and ask the SCREEN whether they happened. Each is graded from a
-    // captured body, never from the bridge's log, because a row the app chose not to draw is still
-    // a broken desk to the person looking at it.
-    const screen = async () => String(await cdp.eval('return document.body.innerText;').catch(() => ''));
-    const press = async (label) => {
-      // Click a control by its accessible label or text; several controls have no stable id.
-      const wanted = JSON.stringify(label);
-      return cdp.eval(`
-        const want = ${wanted};
-        const norm = (el) => ((el.innerText || '') + ' ' + (el.getAttribute('aria-label') || '')).trim();
-        const el = [...document.querySelectorAll('button,[role=button],[role=menuitem]')].find((b) => {
-          const text = norm(b);
-          return text === want || text.includes(want);
-        });
-        if (!el) return 'missing';
-        for (const type of ['pointerdown', 'pointerup']) el.dispatchEvent(new PointerEvent(type, { bubbles: true }));
-        el.click();
-        return 'clicked';
-      `);
-    };
-
-    // ---- a tool card. The agent's tool call has to become a row the desktop draws.
-    // Read the transcript through BOTH routes: the list carries message infos, the parts live
-    // under `/message/:id`, and a tool call only appears in the latter.
-    const msgList = await fetch(`${bridgeUrl}/api/session/${session.id}/message`)
-      .then((r) => r.json())
-      .catch(() => ({}));
-    let toolParts = JSON.stringify(msgList).match(/"type":"tool"/g) ?? [];
-    if (toolParts.length === 0) {
-      for (const info of (msgList.data ?? []).slice(0, 6)) {
-        if (!info?.id) continue;
-        const detail = await fetch(`${bridgeUrl}/api/session/${session.id}/message/${info.id}`)
-          .then((r) => r.json())
-          .catch(() => ({}));
-        toolParts = toolParts.concat(JSON.stringify(detail).match(/"type":"tool"/g) ?? []);
-      }
-    }
-    console.log(`  … tool parts found in the transcript: ${toolParts.length}`);
-    if (toolParts.length > 0) {
-      // ★ The desktop renders a tool call as "Used / <n> / <name>" — measured: the card for a call
-      // named `echo` drew as `Used 1 echo`. It does NOT say "tool" or "bash" for a tool named
-      // otherwise, so matching those words reported a missing card on a card that was on screen.
-      const withCard = await waitFor(
-        async () => {
-          const text = await screen();
-          return /Used\b|\becho\b|^\s*⚙/im.test(text) ? true : undefined;
-        },
-        20_000,
-      );
-      if (withCard) ok('a tool call renders a card in the desktop');
-      else {
-        // Dump the transcript so the next reader sees what the app DID draw, not just that the
-        // regex failed. A card the app declines to render and a card it renders differently are
-        // different bugs.
-        const dump = await screen();
-        bad('a tool call never drew a card');
-        console.log(
-          `    session view was:\n${dump
-            .split('\n')
-            .slice(0, 24)
-            .map((line) => `      | ${line}`)
-            .join('\n')}`,
-        );
-      }
-    } else {
-      // The fake agent only emits a tool call under FAKE_ACP_TOOL; say so rather than pass silently.
-      console.log('  … no tool call in this run (set FAKE_ACP_TOOL=1 to exercise the card)');
-    }
-
-    // ---- the agent switcher. The bridge publishes the ACP modes as agents, so this is the same
-    // list `Shift+Tab` walks in the TUI; in the desktop it is a menu. Opening it must not be empty.
-    // What the composer actually offers. Printed, because the labels are the app's own and
-    // guessing them is how three scenarios ended up skipped rather than driven.
-    const controls = await cdp
-      .eval(`
-        const norm = (el) => ((el.innerText || '') + '|' + (el.getAttribute('aria-label') || '')).trim().slice(0, 40);
-        return JSON.stringify(
-          [...document.querySelectorAll('button,[role=button],[role=combobox],[data-slot]')]
-            .map((el) => norm(el))
-            .filter((text) => text.length > 1)
-            .slice(0, 30),
-        );
-      `)
-      .catch(() => '[]');
-    console.log('  … composer controls:', String(controls).slice(0, 500));
-
-    if (PERMISSION_MODE) {
-      console.log('  … MODE=permission: skipping the conversation checks that need a finished turn');
-    }
-
-    if (PERMISSION_MODE) {
-      // Only the dialog is graded in this mode; the rest needs a turn that finishes.
-      console.log("  … MODE=permission: the conversation checks are skipped");
-    } else {
-      // ---- the agent switcher. There is no agent button in the composer: the desktop exposes it as
-      // `mod+.` / the `/agent` slash command (`composer/commands.tsx`: id `agent.cycle`, keybind
-      // `mod+.`, slash `agent`), which walks the same list the TUI's Shift+Tab does. Drive the slash
-      // command and grade it from the BRIDGE — `session.agent` is the authoritative record — with the
-      // screen as the second opinion.
-      const agentOf = () =>
-        fetch(`${bridgeUrl}/api/session/${session.id}`)
-          .then((r) => r.json())
-          .then((body) => body?.data?.agent ?? '')
-          .catch(() => '');
-      const agentBefore = await agentOf();
-      const cycled = await cdp
-        .eval(`
-          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-          const editor = [...document.querySelectorAll('[contenteditable=true]')].find((el) => el.isContentEditable);
-          if (!editor) return { ok: false, reason: 'no composer' };
-          editor.focus();
-          editor.textContent = '/agent';
-          editor.dispatchEvent(new InputEvent('input', { bubbles: true, data: '/agent' }));
-          await sleep(1500);
-          for (const type of ['keydown', 'keypress', 'keyup']) {
-            editor.dispatchEvent(new KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-          }
-          await sleep(2500);
-          return { ok: true, screen: document.body.innerText.slice(0, 400) };
-        `)
-        .catch((error) => ({ ok: false, reason: String(error) }));
-      const agentAfter = await agentOf();
-      if (!cycled.ok) {
-        bad(`the agent cycle could not run: ${cycled.reason}`);
-      } else if (agentAfter && agentBefore && agentAfter !== agentBefore) {
-        ok(`/agent moved the session from ${agentBefore} to ${agentAfter}`);
-      } else if (/plan|default|accept|auto|yolo|agent/i.test(String(cycled.screen))) {
-        ok('the agent picker opens from the composer');
-      } else {
-        bad(`/agent opened nothing (saw ${JSON.stringify(String(cycled.screen).slice(0, 120))})`);
-      }
-
-      // ---- the todo/plan sidebar. The ACP `plan` update has no opencode v2 surface of its own, so
-      // this is the check that says whether a plan the agent sends reaches the desk at all. Enable
-      // it in the fake agent and send another prompt; the entries should then name themselves.
-      const planTurn = await cdp
-        .eval(`
-          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-          const editor = [...document.querySelectorAll('[contenteditable=true]')].find((el) => el.isContentEditable);
-          if (!editor) return { ok: false, reason: 'no composer' };
-          editor.focus();
-          editor.textContent = 'what is the plan?';
-          editor.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'what is the plan?' }));
-          await sleep(600);
-          for (const type of ['keydown', 'keypress', 'keyup']) {
-            editor.dispatchEvent(new KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-          }
-          await sleep(6000);
-          return { ok: true, screen: document.body.innerText.slice(0, 800) };
-        `)
-        .catch((error) => ({ ok: false, reason: String(error) }));
-      const planScreen = String(planTurn.screen ?? '');
-      if (!planTurn.ok) {
-        bad(`the plan turn could not run: ${planTurn.reason}`);
-      } else if (/first|second/i.test(planScreen)) {
-        ok("the agent's plan entries reach the desktop");
-      } else if (/todo|plan/i.test(planScreen)) {
-        ok('the desktop shows a plan/todo surface');
-      } else {
-        console.log('  … no plan surface visible (the fake agent needs FAKE_ACP_PLAN=1 for this turn)');
-      }
-
-      // ---- the model picker reads the bridge's catalog, not a placeholder.
-      const modelOpened = await press('模型');
-      await sleep(1500);
-      const modelScreen = await screen();
-      if (modelOpened === 'clicked') {
-        const named = /fake\/model-1|codemaker|deepseek|model-1/i.test(modelScreen);
-        named ? ok('the model picker lists the bridge catalog') : bad('the model picker listed no real model');
-      } else {
-        console.log('  … no model control matched by label; the composer shows it inline');
-      }
-
-      // ---- the sidebar's own actions: a new session from the project row opens a composer.
-    }
-
-    // ---- the desktop's TERMINAL tab. This is the desk's counterpart of the TUI's `!command`
-    // (the TUI has no terminal panel and the desk has no bang prefix — measured by reading both
-    // composers). The panel drives a PTY through the server, so what it proves here is that the
-    // bridge's `/api/shell` surface is reachable at all: an empty answer leaves the panel blank.
-    const shellProbe = await fetch(`${bridgeUrl}/api/shell`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ command: { command: 'echo desktop-shell-ok', timeout: 5000 } }),
-    })
-      .then((r) => r.json())
-      .then((body) => body?.data ?? body)
-      .catch(() => undefined);
-    if (shellProbe && (shellProbe.id || shellProbe.status)) {
-      ok('the bridge answers a shell command the terminal tab can attach to');
-    } else {
-      console.log('  … /api/shell answered nothing usable; the terminal tab may stay empty');
-    }
-
-    // ---- the conversation can be reopened. The desk's own "back to the list" is not reachable
-    // from a session (no back control, and clicking the sidebar row does not leave the view —
-    // measured), so this asks the question that actually matters: is the conversation still there
-    // to reopen? A bridge that lost it on reconnect would fail here whatever the UI does.
-    const reopenable = await fetch(`${bridgeUrl}/api/session/${session.id}`)
-      .then((r) => r.json())
-      .then((body) => body?.data ?? undefined)
-      .catch(() => undefined);
-    if (!reopenable) {
-      bad('the session is gone from the bridge after the desk used it');
-    } else {
-      // Its transcript has to be readable too; a header with no messages is not a conversation.
-      const transcript = await fetch(`${bridgeUrl}/api/session/${session.id}/message`)
-        .then((r) => r.json())
-        .then((body) => body?.data ?? [])
-        .catch(() => []);
-      transcript.length > 0
-        ? ok(`the conversation is still reopenable (${transcript.length} messages)`)
-        : bad('the session survived but its transcript is empty');
-    }
-
-    // ---- the permission dialog. `FAKE_ACP_PERMISSION=allow` makes the agent ask before it runs a
-    // tool; the bridge turns that into `/api/permission/request`, and the desktop has to put a
-    // decision in front of the user. This is the one place where doing nothing has a cost — the
-    // agent is blocked until an answer arrives — so a silent failure here would hang every turn.
-    const permPending = await fetch(`${bridgeUrl}/api/permission/request`)
-      .then((r) => r.json())
-      .then((body) => (body?.data ?? []).length)
-      .catch(() => 0);
-    if (permPending > 0) {
-      // The dialog can arrive *during* an earlier turn and block it, so give the turn time to
-      // reach the agent's request before looking, and treat the whole block as informational when
-      // the desk is mid-conversation.
-      await sleep(3000);
-      const asked = await waitFor(
-        async () => (/允许|拒绝|Allow|Reject|permission/i.test(await screen()) ? true : undefined),
-        30_000,
-      );
-      if (asked) {
-        ok('the permission request reaches the desktop as a dialog');
-        // Answer it; leaving it pending is what would hang the next turn.
-        const answered = await cdp
-          .eval(`
-            const el = [...document.querySelectorAll('button')].find((b) => /允许|Allow/.test((b.innerText || '') + (b.getAttribute('aria-label') || '')));
-            if (!el) return 'no allow button';
-            for (const type of ['pointerdown', 'pointerup']) el.dispatchEvent(new PointerEvent(type, { bubbles: true }));
-            el.click();
-            return 'allow';
-          `)
-          .catch((error) => String(error));
-        await sleep(2000);
-        const left = await fetch(`${bridgeUrl}/api/permission/request`)
-          .then((r) => r.json())
-          .then((body) => (body?.data ?? []).length)
-          .catch(() => -1);
-        answered !== 'no allow button' && left === 0
-          ? ok('answering the dialog releases the agent')
-          : bad(`the permission answer did not land (click=${answered}, pending=${left})`);
-      } else {
-        bad('a permission request was pending and the desktop showed no dialog');
-      }
-    } else {
-      console.log('  … no permission request in this run (the fake agent asks under FAKE_ACP_PERMISSION)');
-    }
-
-    const newSession = await press('新建会话');
-    await sleep(2500);
-    const afterNew = await screen();
-    /随便问点什么|会话|Ask anything/i.test(afterNew)
-      ? ok('a new session opens a composer')
-      : bad(`new session did not open a composer (saw ${JSON.stringify(afterNew.slice(0, 120))})`);
+    /desktop-e2e-reply|you said/i.test(String(sent))
+      ? ok("the agent's reply rendered in the desktop")
+      : bad(`no reply on screen (${String(sent).slice(0, 140)})`);
   } finally {
     if (cdp && serverUrl) {
       const removed = await cdp.eval(REMOVE_SERVER(serverUrl)).catch(() => 'failed');

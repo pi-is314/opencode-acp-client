@@ -1,4 +1,4 @@
-# Roadmap — what we know we owe, and where each item stands
+# Roadmap — three things we know we owe, and deliberately do **not** do in this version
 
 > 中文版：[ROADMAP.zh.md](ROADMAP.zh.md)
 
@@ -6,33 +6,41 @@
 > Each item carries "where it stands today" and "what must be re-confirmed before starting", so
 > the next person does not have to redo the research from scratch.
 >
-> Status: **1 done** (opencode desktop, since 2026-11-28); 2 and 3 **not started**.
+> Status: all three **not started**.
 
 ---
 
-## 1. opencode desktop — supported, with one limit that belongs to the desktop
+## 1. Verify and complete support for opencode desktop
 
-**Where it stands:** desktop holds a conversation against the bridge, and `scripts/e2e-desktop.mjs`
-proves it (15 checks, including a tool card, the agent picker, the plan surface, the terminal
-surface and the approval dialog). How to run one is in [DESKTOP.md](DESKTOP.md).
+**Where it stands:** the documentation **does not recommend any non-TUI client**, and the
+`--bridge-port` section no longer mentions desktop either.
 
-The questions this section used to raise are answered:
+The reason is **specific and verified**, not "we never tried":
 
-| Question | Answer |
+| Fact | Where it comes from |
 |---|---|
-| Does desktop find a state directory over HTTP? | Not needed. Isolation is per **bridge**, not per client: one bridge drives one agent, and its state layout is already per agent |
-| Which routes must be implemented? | The ones it actually decodes — `/api/project`, `/api/config`, `/api/session`, `/api/model`, `/api/agent`, `/api/health`, `/api/info`. **Four of them were answering less than the schema requires** and each one crashed the desk in a different place; see `318a5e7` |
-| Does the "Add server" card still get stuck on the health probe? | No; both endpoints answer |
+| The bridge isolates the TUI's state roots per agent | `XDG_STATE_HOME` / `XDG_DATA_HOME` / `OPENCODE_DB` are set on the child we spawn (`tuiEnv` in `src/index.ts`) |
+| **No other client can be given them** | A client's storage roots are decided **when it starts**; an HTTP server cannot change them |
+| Consequence | A second client against the same bridge has tabs that are **not separated per agent** — exactly the mixing the isolation exists to prevent |
 
-★ **The one thing that cannot be fixed here.** A client that keeps its own list of projects (the
-desktop does) only shows a project it has been told about, and told about through its own picker.
-The bridge cannot add one on its behalf — that is the desktop's model, and the same is true of any
-server it points at, not something this bridge introduces. It is a step in the desktop's normal use,
-not a limitation to document around.
+★ That isolation came out of **fixing a bug** (two agents' tabs mixed together, the model picker
+answered for the wrong one), so it is not an optional optimisation — it is the correct behaviour.
 
-★ **A note for the next client.** The TUI ignores fields the desktop reads without a guard. A route
-that satisfies the TUI can still crash the desk, so "the user interface renders it" is not the bar
-for a new route — compare against a real `opencode serve` (DESKTOP.md, "What the bridge answers").
+**Questions to answer before starting:**
+
+1. Does desktop recognise a state directory that is **communicated over HTTP**? (If it reads one
+   from Settings, the user could perhaps be guided to change it.)
+2. Desktop consumes a wider surface than the TUI (`/api/fs/list`, provider, integration and other
+   routes) — **which of them must be implemented**?
+3. Its "Add server" card gets stuck on the **health probe** (that is why both `/api/health` and
+   `/api/info` are served) — has the probe endpoint moved again since v2?
+4. Once isolation is possible, **`--bridge-port` and the "not yet" paragraph in the README have to
+   be changed back together** (`git log --grep "stop recommending other v2 clients"` finds that
+   commit).
+
+**How it would be accepted**: to the same standard as the TUI — **asserted against the screen**,
+not "the endpoint answered" (AGENTS.md rule 8). If desktop's behaviour can only be judged by hand,
+the documentation must say "not automated" outright rather than hint that it works.
 
 ### 1a. What was measured on 2026-11-24 (macOS, OpenCode.app 2.0.32 → 2.4.1)
 

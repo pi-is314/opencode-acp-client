@@ -94,33 +94,6 @@ tab 混在一个 TUI 里，正是「新 tab 显示成另一个 agent 的模型�
 agent 隔离（`~/.opencode-acp-client/opencode/<agent-slug>/`），属于其它 agent 的会话会被拒绝
 （`404`）。`--` 只用于**新建**会话。
 
-### 用 opencode desktop 代替 TUI
-
-desktop 说的是和 TUI 同一套 HTTP 接口，所以它可以连这个桥，而不是连 opencode 自己的服务端。
-起一个桥，然后把 desktop 指过来：
-
-```bash
-oc-acp-client --bridge-port 8765 . -- qwen --acp
-```
-
-它会打印一行带地址的输出 —— `http://127.0.0.1:8765` —— 那就是要在 desktop 里添加的 server。
-之后就是 desktop 的正常用法：加项目、开会话。
-
-**桥会一直跑着，直到你把它停掉。** 它没有任何办法知道 desktop 已经关了，所以用完要收尾：
-
-```bash
-oc-acp-client ps            # 当前有哪些：pid、agent、目录、URL
-oc-acp-client stop          # 停掉它（有多个时加 <pid> 或 --all）
-```
-
-`stop` 会把 agent 和桥一起关掉，不留残余进程。
-
-**一个桥一个 agent**，和 TUI 一样 —— 两个 agent 就是两个端口上的两个桥，这也正是 desktop 里
-它们显示成两个 server 的原因。
-
-★ `--bridge-host 0.0.0.0` 会接受其它机器的连接，**而且没有鉴权**；除非你确定网络可信，否则保持
-默认的 `127.0.0.1`。
-
 ## 常用参数
 
 | 参数 | 含义 |

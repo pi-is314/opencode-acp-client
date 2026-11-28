@@ -37,7 +37,6 @@
 | 6 | [docs/ACP-COMPAT.md](docs/ACP-COMPAT.md) | 运行时能力降级规则，以及 opencode v2 TUI 没有对应 ACP 能力的面（通用规则；**逐 agent 的实测**见下一条）|
 | 6.5 | [docs/AGENT-CAPABILITIES.zh.md](docs/AGENT-CAPABILITIES.zh.md) | ★ **逐 agent 能力实测**：`dsh --profile acp` / `opencode acp` / [claude-acp](https://github.com/agentclientprotocol/claude-agent-acp) / [codex-acp](https://github.com/agentclientprotocol/codex-acp) 的 `initialize` 回包，以及各自在本项目里**掉什么功能**（例如 dsh 官方 acp 没有 `loadSession` → 恢复成功但没有历史，tab 保留真名 + 一条 Notice 说明原因）|
 | 7 | [docs/SCENARIOS.md](docs/SCENARIOS.md) | ★ **假 agent 的场景矩阵**：能演哪些场景、各自由哪个测试断言、**屏幕上渲染成什么**、渲染不了的原因（含尚未断言的缺口）|
-| 7.5 | [docs/DESKTOP.zh.md](docs/DESKTOP.zh.md) | ★ **用 opencode desktop 连这个桥**：只写桥这一侧 —— 怎么为 desktop 起一个桥、desktop 会解析哪些路由（以及为什么 TUI 忽略的字段能让它崩）、`stop`/`ps`/`ps --prune`、日志里值得预期的两种重连。**它不教怎么用 desktop**：加 server、加项目、`/agent`、终端页签都是 desktop 自己的。 |
 | 8 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | ★ **开发笔记**：纯服务端模式（`--no-tui`）、怎么观察一次运行、以及动这个桥之前该知道的坑 |
 | 9 | [docs/UPSTREAM-TUI-TESTS.md](docs/UPSTREAM-TUI-TESTS.md) | ★ **官方 TUI 测试 → 本桥契约的映射表 + 逐版本对照流程**（官方发新版先看这里）|
 | 10 | [docs/SESSION-LIFECYCLE.zh.md](docs/SESSION-LIFECYCLE.zh.md) | ★ **session 全机制**：双 id 与映射表、三条恢复链路、`-c`/`--session`/adoption、排序与 epilogue、五个时序雷区（每个机制都对应一次实测故障）|

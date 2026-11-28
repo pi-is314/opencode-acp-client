@@ -1,35 +1,106 @@
-# Roadmap — 已知要做的、以及每件事现在到哪一步
+# Roadmap — 已知要做、但**当前版本不做**的三件事
 
 > English: [ROADMAP.md](ROADMAP.md)
 
 > 这一页的用途：把「我们知道自己欠什么」写下来，并且写清**为什么现在不做**。
 > 每一条都带「现在是什么状态」和「动手前要重新确认的事实」——避免下次动手时再从零调研。
 >
-> 状态：**第 1 项已完成**（opencode desktop，2026-11-28）；第 2、3 项 **未开始**。
+> 状态：全部 **未开始**。
 
 ---
 
-## 1. opencode desktop —— 已支持，只剩一个属于 desktop 自己的限制
+## 1. 验证并补全 opencode desktop 的用法
 
-**现状**：desktop 能对着桥正常对话，`scripts/e2e-desktop.mjs` 证明了这一点（15 项，含工具卡片、
-agent 选择器、plan 面板、终端面板、审批对话框）。怎么跑一个桥见 [DESKTOP.zh.md](DESKTOP.zh.md)。
+**现在是什么状态：文档里**不推荐**任何非 TUI 的客户端**，`--bridge-port` 的说明也不再提 desktop。
 
-这一节原来提出的问题都有答案了：
+原因是**具体的、已核实的**，不是"没试过"：
 
-| 问题 | 答案 |
+| 事实 | 依据 |
 |---|---|
-| desktop 会从 HTTP 拿到状态目录吗？ | 不需要。隔离是按**桥**分的，不是按客户端：一个桥驱动一个 agent，它自己的状态布局本来就按 agent 分 |
-| 必须实现哪些路由？ | 它真正解析的那些 —— `/api/project`、`/api/config`、`/api/session`、`/api/model`、`/api/agent`、`/api/health`、`/api/info`。**其中四个答得比 schema 要求的少**，每一个都在不同的地方把 desktop 弄崩；见 `318a5e7` |
-| “添加 server”那张卡片还会卡在健康探测上吗？ | 不会；两个端点都有应答 |
+| 桥会按 agent 隔离 TUI 的状态根 | `XDG_STATE_HOME` / `XDG_DATA_HOME` / `OPENCODE_DB` 设在我们 spawn 的子进程上（`src/index.ts` 的 `tuiEnv`） |
+| **别的客户端拿不到这些** | 客户端的存储根是**它自己启动时**决定的，HTTP 服务端改不了 |
+| 后果 | 第二个客户端接同一个桥，它的 tab **不按 agent 分开**——正是隔离要防的混用 |
 
-★ **唯一在这里修不了的事。** 一个自己维护项目列表的客户端（desktop 就是），只会显示它被告知过的
-项目，而被告知的途径是它自己的选择器。桥没法替它加 —— 那是 desktop 的模型，对任何 server 都一样，
-不是这个桥引入的。它是 desktop 正常用法里的一步，不是需要文档绕着写的限制。
+★ 这次隔离是**修 bug 修出来的**（两个 agent 的 tab 混在一起、模型选择器答错），
+所以不是"可选优化"，是对的行为。
 
-★ **给下一个客户端的提醒。** TUI 忽略的字段，desktop 会不加防护地读。一个“TUI 能渲染”的路由照样
-能把 desktop 弄崩，所以新路由的验收标准不是“界面显示出来了”—— 要拿真实的 `opencode serve` 对照
-（DESKTOP.zh.md 的「桥为 desktop 回答了哪些」）。
+**动手前要先答的问题：**
 
+1. desktop 认不认某个**经 HTTP 告知**的状态目录？（如果它自己从 Settings 读，也许能引导用户改）
+2. desktop 消费的接口面比 TUI 宽（`/api/fs/list`、provider、integration 等路由），**哪些必须实现**？
+3. 它的「Add server」卡在**健康探测**上（`/api/health` 与 `/api/info` 两个拼法都提供就是为此），
+   v2 之后探测端点是否又搬过家？
+4. 一旦能隔离，**`--bridge-port` 与 README 里那段「还不行」要一起改回来**
+   （`git log --grep "stop recommending other v2 clients"` 能找到那一次提交）。
+
+**验收方式**：与 TUI 同标准——**按屏幕**断言，不是"接口有响应"（见 AGENTS.md 铁律 8）。
+desktop 的行为如果只能人工看，就要在文档里明确写「未自动化」，而不是含糊说"可行"。
+
+### 1a. 2026-11-24 实测（macOS，OpenCode.app 2.0.32 → 2.4.1）
+
+★ **desktop 连我们的桥是能跑的。** 用 CDP 走通了完整链路：加服务器 → 打开会话 → 发消息 →
+回复渲染出来。所以上面第 3 问（"卡在健康探测"）**已经不成立**——`/api/health` + `/api/info` 够用。
+
+★ **怎么驱动它**（这就是自动化的地基）：
+
+```
+/Applications/OpenCode.app/Contents/MacOS/OpenCode --remote-debugging-port=9223
+```
+
+`--remote-debugging-port` **必须走命令行**：`environment.ts` 只在 `!app.isPackaged` 时读
+`OPENCODE_DESKTOP_REMOTE_DEBUGGING_PORT`，而发行版是打包的。CDP 目标只有一个：
+`oc://renderer/index.html`。加服务器：设置 → 服务器 → 页面右上「添加服务器」→ 菜单里的
+「添加服务器」→ 填 URL → 「添加服务器」（**密码可以留空**）。菜单项要点
+`pointerdown`+`pointerup`+`click` 三连才开，单独一个 `.click()` 没反应。
+
+★ **「本地服务器」是 desktop 自己的 opencode**，不是我们的桥：它跑
+`opencode-cli serve --service`（来自 `~/Library/Application Support/ai.opencode.desktop/cli/`），
+那些会话是原生 opencode 的数据。它起不来是**致命的**（窗口变成错误页、app 退出），
+**没有"只用外部服务器"的模式**。
+
+★ **隔离为什么还不行，说准一点。** 四个开关里有三个被 `!app.isPackaged` 挡住：
+
+| 开关 | 对打包版的效果 |
+|---|---|
+| `OPENCODE_DESKTOP_TEST_ROOT` | ✗ `createTestRoot` 打包时直接返回 undefined |
+| `OPENCODE_DESKTOP_ISOLATED_SERVER=1` | ✗ 给 `serve` 加 `--port 0` 的就是它；实测 `args=["serve","--service"]` |
+| `--user-data-dir` | ✗ 被 `app.setPath("userData", …)` 覆盖 |
+| `OPENCODE_TEST_ONBOARDING=1` | ⚠ 只有它活着，它**搬 XDG 根目录**（+`OPENCODE_DB=:memory:`），但**不动端口** |
+
+**端口就是墙。** `defaultPort()`（`packages/cli/src/services/service-config.ts`）对 channel
+`latest`（发行版 desktop 走的就是它）返回 `0xc0de` = **49374**，`local` 是 `0xc0df`，其余由
+channel 哈希出 10000..60000。所以两个 desktop 不能同时跑，隔离尝试会和用户自己的实例撞车：
+
+    Managed service port 49374 on 127.0.0.1 is already in use by another process.
+
+`opencode service set port <n>` 是官方给的出路——**但它改的是用户的全局服务注册表**，
+所以测试里**绝不能调用**（本次调查调用过一次，已改回）。
+
+⟹ **打包版 desktop 无法隔离测试。要测它，就得从源码跑**（`packages/desktop`，
+`bun run dev`）：它设 `OPENCODE_CHANNEL=local`（端口 49375）**并且**
+`OPENCODE_DESKTOP_ISOLATED_SERVER=1`（随机 `--port 0`），`isPackaged === false`，上面每个开关
+都能用。在那套 harness 出现之前，本节一直关心的「每个 agent 的标签页隔离」仍然悬着。
+
+★ **这一轮查出了两个桥的真缺陷，已修**（提交 `e6781f6`）：
+
+1. `GET /api/project` 硬编码返回 `[]`。TUI 从不请求这条路由，所以一直没人发现；任何按项目
+   列表搭侧边栏的客户端都会看到"没有项目"。现在按会话目录（加启动目录）去重列出。
+2. `location.project.id` 对**原始启动路径**做哈希，而 `projectIdFor()`——其他所有接口用的——
+   哈希的是 `realpath()`。macOS 上 `/var/...` 就是 `/private/var/...`，于是同一个工作区一条路由
+   给 `proj_d94b…`、另一条给 `proj_f4e4…`；客户端拿 location 的 id 去 `/api/project` 里找，找不到。
+
+★ **仍然不通过的（2026-11-26 实测）**：刚启动的 dev desktop 会请求 `/api/project`、
+`/api/location`、`/api/vcs`，也会把新增的服务器画进侧边栏，然后**始终不发 `GET /api/session`**
+——所以列不出会话。有一次它确实列出来了，但那台 desktop 已经跑了一段时间；同样的操作在
+全新启动的上不做，等 15 秒以上也不变。已排除僵尸服务器条目。`scripts/e2e-desktop.mjs`
+（`pnpm e2e:desktop`）就是这套 harness：前 8 项通过、后 2 项失败，**故意不进 `pnpm verify`**。
+
+★ **清理的坑，踩了两次**：`pkill -f "OpenCode.app/Contents/MacOS/OpenCode"` 只杀 app，
+**不杀它拉起的 `opencode-cli serve --service` 子进程**。那个孤儿占着 49374，之后每次启动
+desktop 都撞端口。任何 desktop 实验之后，
+`ps aux | grep "[o]pencode-onboarding"` 必须是空的。
+
+---
 
 ## 2. 实现 ACP v2
 
