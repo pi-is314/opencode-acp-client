@@ -192,6 +192,48 @@ describe('SSE-driven flows', () => {
     }
   });
 
+  it('broadcasts one turn to every client attached at the same time', async () => {
+    // ★ The TUI, a browser page and the desktop can all sit on one bridge at once — opencode's own
+    // server fans events out to a `Set` of subscribers (`packages/server/src/event-feed.ts`), and
+    // nothing about one client's presence is supposed to change what another one sees. Measured:
+    // two subscribers of one turn received identical event lists.
+    const { url } = await start({ FAKE_ACP_MODELS: '1', FAKE_ACP_REPLY: 'everyone-sees-this' });
+    const first = openStream(url);
+    const second = openStream(url);
+    try {
+      await first.ready;
+      await second.ready;
+      const session = await createSession(url);
+      await prompt(url, session, 'one turn, two clients');
+      await first.until((types) => types.includes('session.execution.succeeded'));
+      await second.until((types) => types.includes('session.execution.succeeded'));
+
+      // Both saw the creator event and the turn's end — not "whoever was listening first".
+      for (const stream of [first, second]) {
+        const types = stream.events.map((event) => event.type);
+        expect(types).toContain('session.created');
+        expect(types).toContain('session.execution.succeeded');
+      }
+    } finally {
+      first.close();
+      second.close();
+    }
+  });
+
+  it('answers every client from the same session state', async () => {
+    // There is one copy of the state: whoever asks sees the same sessions, titles and models. That
+    // is what makes a browser page and a TUI the same conversation rather than two.
+    const { url } = await start({ FAKE_ACP_MODELS: '1', FAKE_ACP_REPLY: 'shared-state' });
+    const session = await createSession(url);
+    await prompt(url, session, 'same everywhere');
+    const [one, two] = await Promise.all([
+      (await fetch(`${url}/api/session`)).json(),
+      (await fetch(`${url}/api/session`)).json(),
+    ]);
+    expect(JSON.stringify(one)).toBe(JSON.stringify(two));
+    expect((one as { data: Array<{ id: string }> }).data[0].id).toBe(session);
+  });
+
   it('replays a permission settlement and leaves no stale pending permission after reconnect', async () => {
     const { url } = await start({ FAKE_ACP_PERMISSION: 'allow', FAKE_ACP_REPLY: 'done' });
     const session = await createSession(url);
