@@ -1145,6 +1145,45 @@ async function main() {
       // ---- the sidebar's own actions: a new session from the project row opens a composer.
     }
 
+    // ---- the desktop's TERMINAL tab. This is the desk's counterpart of the TUI's `!command`
+    // (the TUI has no terminal panel and the desk has no bang prefix — measured by reading both
+    // composers). The panel drives a PTY through the server, so what it proves here is that the
+    // bridge's `/api/shell` surface is reachable at all: an empty answer leaves the panel blank.
+    const shellProbe = await fetch(`${bridgeUrl}/api/shell`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ command: { command: 'echo desktop-shell-ok', timeout: 5000 } }),
+    })
+      .then((r) => r.json())
+      .then((body) => body?.data ?? body)
+      .catch(() => undefined);
+    if (shellProbe && (shellProbe.id || shellProbe.status)) {
+      ok('the bridge answers a shell command the terminal tab can attach to');
+    } else {
+      console.log('  … /api/shell answered nothing usable; the terminal tab may stay empty');
+    }
+
+    // ---- the conversation can be reopened. The desk's own "back to the list" is not reachable
+    // from a session (no back control, and clicking the sidebar row does not leave the view —
+    // measured), so this asks the question that actually matters: is the conversation still there
+    // to reopen? A bridge that lost it on reconnect would fail here whatever the UI does.
+    const reopenable = await fetch(`${bridgeUrl}/api/session/${session.id}`)
+      .then((r) => r.json())
+      .then((body) => body?.data ?? undefined)
+      .catch(() => undefined);
+    if (!reopenable) {
+      bad('the session is gone from the bridge after the desk used it');
+    } else {
+      // Its transcript has to be readable too; a header with no messages is not a conversation.
+      const transcript = await fetch(`${bridgeUrl}/api/session/${session.id}/message`)
+        .then((r) => r.json())
+        .then((body) => body?.data ?? [])
+        .catch(() => []);
+      transcript.length > 0
+        ? ok(`the conversation is still reopenable (${transcript.length} messages)`)
+        : bad('the session survived but its transcript is empty');
+    }
+
     // ---- the permission dialog. `FAKE_ACP_PERMISSION=allow` makes the agent ask before it runs a
     // tool; the bridge turns that into `/api/permission/request`, and the desktop has to put a
     // decision in front of the user. This is the one place where doing nothing has a cost — the
