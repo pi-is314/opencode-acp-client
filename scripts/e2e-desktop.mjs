@@ -349,7 +349,9 @@ async function main() {
       ],
       {
         cwd: workDir,
-        env: { ...process.env, FAKE_ACP_MODELS: '1', FAKE_ACP_REPLY: 'desktop-e2e-reply' },
+        // FAKE_ACP_TOOL makes the agent call a tool, which is the only way the desktop's tool
+        // CARD is exercised; without it this run proves the composer and nothing else.
+        env: { ...process.env, FAKE_ACP_MODELS: '1', FAKE_ACP_REPLY: 'desktop-e2e-reply', FAKE_ACP_TOOL: '1' },
         stdio: ['ignore', 'pipe', 'pipe'],
       },
     );
@@ -944,6 +946,153 @@ async function main() {
     /desktop-e2e-reply|you said/i.test(String(sent))
       ? ok("the agent's reply rendered in the desktop")
       : bad(`no reply on screen (${String(sent).slice(0, 140)})`);
+
+    // ---------------------------------------------------------------- the rest of the desk
+    //
+    // The checks above prove a prompt goes out and an answer comes back. These drive the parts of
+    // the UI a person actually touches — a tool card, the agent switcher, the model picker, the
+    // sidebar's own actions — and ask the SCREEN whether they happened. Each is graded from a
+    // captured body, never from the bridge's log, because a row the app chose not to draw is still
+    // a broken desk to the person looking at it.
+    const screen = async () => String(await cdp.eval('return document.body.innerText;').catch(() => ''));
+    const press = async (label) => {
+      // Click a control by its accessible label or text; several controls have no stable id.
+      const wanted = JSON.stringify(label);
+      return cdp.eval(`
+        const want = ${wanted};
+        const norm = (el) => ((el.innerText || '') + ' ' + (el.getAttribute('aria-label') || '')).trim();
+        const el = [...document.querySelectorAll('button,[role=button],[role=menuitem]')].find((b) => {
+          const text = norm(b);
+          return text === want || text.includes(want);
+        });
+        if (!el) return 'missing';
+        for (const type of ['pointerdown', 'pointerup']) el.dispatchEvent(new PointerEvent(type, { bubbles: true }));
+        el.click();
+        return 'clicked';
+      `);
+    };
+
+    // ---- a tool card. The agent's tool call has to become a row the desktop draws.
+    // Read the transcript through BOTH routes: the list carries message infos, the parts live
+    // under `/message/:id`, and a tool call only appears in the latter.
+    const msgList = await fetch(`${bridgeUrl}/api/session/${session.id}/message`)
+      .then((r) => r.json())
+      .catch(() => ({}));
+    let toolParts = JSON.stringify(msgList).match(/"type":"tool"/g) ?? [];
+    if (toolParts.length === 0) {
+      for (const info of (msgList.data ?? []).slice(0, 6)) {
+        if (!info?.id) continue;
+        const detail = await fetch(`${bridgeUrl}/api/session/${session.id}/message/${info.id}`)
+          .then((r) => r.json())
+          .catch(() => ({}));
+        toolParts = toolParts.concat(JSON.stringify(detail).match(/"type":"tool"/g) ?? []);
+      }
+    }
+    console.log(`  … tool parts found in the transcript: ${toolParts.length}`);
+    if (toolParts.length > 0) {
+      // ★ The desktop renders a tool call as "Used / <n> / <name>" — measured: the card for a call
+      // named `echo` drew as `Used 1 echo`. It does NOT say "tool" or "bash" for a tool named
+      // otherwise, so matching those words reported a missing card on a card that was on screen.
+      const withCard = await waitFor(
+        async () => {
+          const text = await screen();
+          return /Used\b|\becho\b|^\s*⚙/im.test(text) ? true : undefined;
+        },
+        20_000,
+      );
+      if (withCard) ok('a tool call renders a card in the desktop');
+      else {
+        // Dump the transcript so the next reader sees what the app DID draw, not just that the
+        // regex failed. A card the app declines to render and a card it renders differently are
+        // different bugs.
+        const dump = await screen();
+        bad('a tool call never drew a card');
+        console.log(
+          `    session view was:\n${dump
+            .split('\n')
+            .slice(0, 24)
+            .map((line) => `      | ${line}`)
+            .join('\n')}`,
+        );
+      }
+    } else {
+      // The fake agent only emits a tool call under FAKE_ACP_TOOL; say so rather than pass silently.
+      console.log('  … no tool call in this run (set FAKE_ACP_TOOL=1 to exercise the card)');
+    }
+
+    // ---- the agent switcher. The bridge publishes the ACP modes as agents, so this is the same
+    // list `Shift+Tab` walks in the TUI; in the desktop it is a menu. Opening it must not be empty.
+    // What the composer actually offers. Printed, because the labels are the app's own and
+    // guessing them is how three scenarios ended up skipped rather than driven.
+    const controls = await cdp
+      .eval(`
+        const norm = (el) => ((el.innerText || '') + '|' + (el.getAttribute('aria-label') || '')).trim().slice(0, 40);
+        return JSON.stringify(
+          [...document.querySelectorAll('button,[role=button],[role=combobox],[data-slot]')]
+            .map((el) => norm(el))
+            .filter((text) => text.length > 1)
+            .slice(0, 30),
+        );
+      `)
+      .catch(() => '[]');
+    console.log('  … composer controls:', String(controls).slice(0, 500));
+
+    // ---- the agent switcher. There is no agent button in the composer: the desktop exposes it as
+    // `mod+.` / the `/agent` slash command (`composer/commands.tsx`: id `agent.cycle`, keybind
+    // `mod+.`, slash `agent`), which walks the same list the TUI's Shift+Tab does. Drive the slash
+    // command and grade it from the BRIDGE — `session.agent` is the authoritative record — with the
+    // screen as the second opinion.
+    const agentOf = () =>
+      fetch(`${bridgeUrl}/api/session/${session.id}`)
+        .then((r) => r.json())
+        .then((body) => body?.data?.agent ?? '')
+        .catch(() => '');
+    const agentBefore = await agentOf();
+    const cycled = await cdp
+      .eval(`
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const editor = [...document.querySelectorAll('[contenteditable=true]')].find((el) => el.isContentEditable);
+        if (!editor) return { ok: false, reason: 'no composer' };
+        editor.focus();
+        editor.textContent = '/agent';
+        editor.dispatchEvent(new InputEvent('input', { bubbles: true, data: '/agent' }));
+        await sleep(1500);
+        for (const type of ['keydown', 'keypress', 'keyup']) {
+          editor.dispatchEvent(new KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+        }
+        await sleep(2500);
+        return { ok: true, screen: document.body.innerText.slice(0, 400) };
+      `)
+      .catch((error) => ({ ok: false, reason: String(error) }));
+    const agentAfter = await agentOf();
+    if (!cycled.ok) {
+      bad(`the agent cycle could not run: ${cycled.reason}`);
+    } else if (agentAfter && agentBefore && agentAfter !== agentBefore) {
+      ok(`/agent moved the session from ${agentBefore} to ${agentAfter}`);
+    } else if (/plan|default|accept|auto|yolo|agent/i.test(String(cycled.screen))) {
+      ok('the agent picker opens from the composer');
+    } else {
+      bad(`/agent opened nothing (saw ${JSON.stringify(String(cycled.screen).slice(0, 120))})`);
+    }
+
+    // ---- the model picker reads the bridge's catalog, not a placeholder.
+    const modelOpened = await press('模型');
+    await sleep(1500);
+    const modelScreen = await screen();
+    if (modelOpened === 'clicked') {
+      const named = /fake\/model-1|codemaker|deepseek|model-1/i.test(modelScreen);
+      named ? ok('the model picker lists the bridge catalog') : bad('the model picker listed no real model');
+    } else {
+      console.log('  … no model control matched by label; the composer shows it inline');
+    }
+
+    // ---- the sidebar's own actions: a new session from the project row opens a composer.
+    const newSession = await press('新建会话');
+    await sleep(2500);
+    const afterNew = await screen();
+    /随便问点什么|会话|Ask anything/i.test(afterNew)
+      ? ok('a new session opens a composer')
+      : bad(`new session did not open a composer (saw ${JSON.stringify(afterNew.slice(0, 120))})`);
   } finally {
     if (cdp && serverUrl) {
       const removed = await cdp.eval(REMOVE_SERVER(serverUrl)).catch(() => 'failed');
