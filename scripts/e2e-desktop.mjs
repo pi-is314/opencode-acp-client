@@ -351,7 +351,15 @@ async function main() {
         cwd: workDir,
         // FAKE_ACP_TOOL makes the agent call a tool, which is the only way the desktop's tool
         // CARD is exercised; without it this run proves the composer and nothing else.
-        env: { ...process.env, FAKE_ACP_MODELS: '1', FAKE_ACP_REPLY: 'desktop-e2e-reply', FAKE_ACP_TOOL: '1' },
+        // FAKE_ACP_TOOL exercises the tool card; FAKE_ACP_PLAN sends a plan update, which is the only
+        // thing that can put entries in the todo surface.
+        env: {
+          ...process.env,
+          FAKE_ACP_MODELS: '1',
+          FAKE_ACP_REPLY: 'desktop-e2e-reply',
+          FAKE_ACP_TOOL: '1',
+          FAKE_ACP_PLAN: '1',
+        },
         stdio: ['ignore', 'pipe', 'pipe'],
       },
     );
@@ -1073,6 +1081,36 @@ async function main() {
       ok('the agent picker opens from the composer');
     } else {
       bad(`/agent opened nothing (saw ${JSON.stringify(String(cycled.screen).slice(0, 120))})`);
+    }
+
+    // ---- the todo/plan sidebar. The ACP `plan` update has no opencode v2 surface of its own, so
+    // this is the check that says whether a plan the agent sends reaches the desk at all. Enable
+    // it in the fake agent and send another prompt; the entries should then name themselves.
+    const planTurn = await cdp
+      .eval(`
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const editor = [...document.querySelectorAll('[contenteditable=true]')].find((el) => el.isContentEditable);
+        if (!editor) return { ok: false, reason: 'no composer' };
+        editor.focus();
+        editor.textContent = 'what is the plan?';
+        editor.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'what is the plan?' }));
+        await sleep(600);
+        for (const type of ['keydown', 'keypress', 'keyup']) {
+          editor.dispatchEvent(new KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+        }
+        await sleep(6000);
+        return { ok: true, screen: document.body.innerText.slice(0, 800) };
+      `)
+      .catch((error) => ({ ok: false, reason: String(error) }));
+    const planScreen = String(planTurn.screen ?? '');
+    if (!planTurn.ok) {
+      bad(`the plan turn could not run: ${planTurn.reason}`);
+    } else if (/first|second/i.test(planScreen)) {
+      ok("the agent's plan entries reach the desktop");
+    } else if (/todo|plan/i.test(planScreen)) {
+      ok('the desktop shows a plan/todo surface');
+    } else {
+      console.log('  … no plan surface visible (the fake agent needs FAKE_ACP_PLAN=1 for this turn)');
     }
 
     // ---- the model picker reads the bridge's catalog, not a placeholder.
