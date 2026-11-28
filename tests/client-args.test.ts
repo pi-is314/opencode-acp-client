@@ -673,6 +673,37 @@ describe('the bridge-owned `ps` command', () => {
   });
 });
 
+describe('stop', () => {
+  it('is a command of its own, with no agent required', () => {
+    const args = parseArgs(['stop']);
+    expect(args.bridgeCommand).toBe('stop');
+    expect(args.agentCommand).toBeUndefined();
+    expect(args.stopPid).toBeUndefined();
+    expect(args.stopAll).toBe(false);
+  });
+
+  it('takes a bare pid', () => {
+    // ★ The pid must be claimed by the BARE-WORD rule beside `upgrade`, not by the
+    // `bridgeCommand === 'stop'` block further down: a pid is not a flag, so it never reached
+    // that block, and `stop 12345` fell through to the directory rule and refused exactly like
+    // `stop` with no argument.
+    expect(parseArgs(['stop', '4242']).stopPid).toBe(4242);
+  });
+
+  it('takes --all', () => {
+    expect(parseArgs(['stop', '--all']).stopAll).toBe(true);
+  });
+
+  it('does not turn the pid into a directory claim or an agent', () => {
+    const args = parseArgs(['stop', '4242']);
+    // `directory` defaults to the working directory, which is what `stop` should inherit — the
+    // point is that the PID did not become one.
+    expect(args.directory).not.toContain('4242');
+    expect(args.agentCommand).toBeUndefined();
+    expect(args.passThrough).toEqual([]);
+  });
+});
+
 describe('the exit wordmark', () => {
   const strip = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, '');
 

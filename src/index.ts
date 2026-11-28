@@ -147,7 +147,7 @@ interface ParsedArgs {
    * A bridge-owned subcommand (`ps`): no agent, no TUI, no opencode binary.
    * Handled in `main` before the agent preflight, like the native ones.
    */
-  bridgeCommand?: 'ps' | 'sessions' | 'upgrade';
+  bridgeCommand?: 'ps' | 'stop' | 'sessions' | 'upgrade';
   psJson: boolean;
   sessionsJson: boolean;
   /** 0 means every row (`--all`). */
@@ -165,6 +165,8 @@ interface ParsedArgs {
   sessionsWidth?: number;
   psPrune: boolean;
   psKill: boolean;
+  stopPid?: number;
+  stopAll: boolean;
 }
 
 /**
@@ -448,7 +450,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   let logPath: string | undefined;
   let session: string | undefined;
   let continueSession = false;
-  let bridgeCommand: 'ps' | 'sessions' | 'upgrade' | undefined;
+  let bridgeCommand: 'ps' | 'stop' | 'sessions' | 'upgrade' | undefined;
   let psJson = false;
   let sessionsJson = false;
   /** 0 means "every row"; `--all`. */
@@ -467,6 +469,8 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   const unknownUpgrade: string[] = [];
   let psPrune = false;
   let psKill = false;
+  let stopPid: number | undefined;
+  let stopAll = false;
   const passThrough: string[] = [];
   let index = 0;
 
@@ -527,6 +531,15 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
         upgradeTarget = arg;
         continue;
       }
+      // ★ A bare number after `stop` is the PID. It has to be claimed HERE, beside `upgrade`:
+      // the later `bridgeCommand === 'stop'` block sits AFTER the bare-word rule, so a pid
+      // (a bare word, not a flag) never reached it and `stop 12345` fell through to the
+      // directory rule — measured: the command refused with "2 bridge processes are running",
+      // the same answer as no argument at all.
+      if (bridgeCommand === 'stop' && /^\d+$/.test(arg) && stopPid === undefined) {
+        stopPid = Number(arg);
+        continue;
+      }
       // The FIRST bare word chooses the mode. A subcommand is native opencode:
       // NO bridge, NO TUI, and every later word is the subcommand's own
       // argument (`opencode session ls`, `opencode api POST …`) — never a
@@ -538,6 +551,14 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
         // opencode has no `ps`, so claiming the word cannot shadow its CLI.
         if (arg === 'ps' || arg === 'daemons') {
           bridgeCommand = 'ps';
+          lastWasForwardedFlag = false;
+          continue;
+        }
+        // ★ `stop` is ours: opencode has no such word, and stopping a bridge you started by hand
+        // is the one piece of housekeeping `ps` alone left to `kill <pid>`. Accepts a pid, `--all`,
+        // and nothing at all (stop the only live bridge, refuse when there are several).
+        if (arg === 'stop') {
+          bridgeCommand = 'stop';
           lastWasForwardedFlag = false;
           continue;
         }
@@ -634,6 +655,16 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
         sessionsUnknown.push(arg);
       }
       continue;
+    }
+    if (bridgeCommand === 'stop') {
+      if (arg === '--all') {
+        stopAll = true;
+        continue;
+      }
+      if (/^\d+$/.test(arg) && stopPid === undefined) {
+        stopPid = Number(arg);
+        continue;
+      }
     }
     if (bridgeCommand === 'ps' && (arg === '--json' || arg === '--prune' || arg === '--kill')) {
       if (arg === '--json') psJson = true;
@@ -745,6 +776,8 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     ...(sessionsWidth ? { sessionsWidth } : {}),
     psPrune,
     psKill,
+    stopPid,
+    stopAll,
     agentCommand,
     agentArgs,
     launch,
@@ -926,7 +959,8 @@ export function printHelp(): void {
         // line each that says which, because "the processes this tool started" could be
         // read as "the sessions it started".
         ['sessions', 'History: conversations this tool remembers, newest first'],
-        ['ps', 'Now: bridge processes running right now (pid, port, age)'],
+        ['ps', 'Now: bridge processes running right now (pid, port, age); --prune forgets dead ones'],
+        ['stop', 'Stop a bridge started with --bridge-port (SIGTERM; its agent dies with it)'],
         ['upgrade, update', 'Move this package to a newer version'],
       ]),
       '',
@@ -1618,6 +1652,101 @@ async function runUpgradeCommand(args: ParsedArgs): Promise<void> {
   process.exitCode = await runUpgrade(plan, (line) => process.stdout.write(`${line}\n`));
 }
 
+/**
+ * `oc-acp-client stop [pid | --all]`
+ *
+ * The bridge started with `--no-tui` serves whoever connects, so it has no idea when the desktop
+ * goes away — stopping it is the user's job, and before this the only way was `ps` plus `kill`. The
+ * default (no argument) stops the only LIVE bridge and refuses when several are running, because
+ * guessing which one somebody meant is how the wrong agent gets killed.
+ *
+ * ★ SIGTERM, never SIGKILL: the bridge's own shutdown closes the server, unregisters the record and
+ * kills the agent it spawned. A SIGKILL leaves the agent orphaned with `ppid=1`, holding the
+ * workspace lock the next `session/load` needs.
+ *
+ * ★ The record is a FILE, and a pid can be reused after a reboot. `isAlive` only answers whether
+ * the number is in use; a pid that is alive but whose record was written before this process
+ * started is still worth signalling — the alternative (never stopping anything) is worse than
+ * occasionally signalling a reused pid, and `ps` prints the agent and directory so a wrong target
+ * is visible before it is sent.
+ */
+function runStopCommand(args: ParsedArgs): void {
+  const entries = listDaemons();
+  const alive = entries.filter((entry) => entry.alive);
+  const explicitPid = args.stopPid;
+
+  if (explicitPid !== undefined) {
+    const target = entries.find((entry) => entry.record.pid === explicitPid);
+    if (!target) {
+      process.stderr.write(`  no bridge process has pid ${explicitPid} (see \`oc-acp-client ps\`)\n`);
+      process.exitCode = 1;
+      return;
+    }
+    if (!target.alive) {
+      process.stdout.write(`  pid ${explicitPid} is not running any more; forgetting its record\n`);
+      pruneDaemons();
+      return;
+    }
+    signalOne(target.record.pid);
+    return;
+  }
+
+  if (args.stopAll) {
+    if (alive.length === 0) {
+      process.stdout.write('  no bridge processes are running\n');
+      return;
+    }
+    for (const entry of alive) signalOne(entry.record.pid);
+    return;
+  }
+
+  if (alive.length === 0) {
+    process.stdout.write('  no bridge processes are running\n');
+    return;
+  }
+  if (alive.length > 1) {
+    process.stderr.write(
+      `  ${alive.length} bridge processes are running; name one by pid or pass --all:\n`,
+    );
+    for (const entry of alive) {
+      process.stderr.write(
+        `    ${entry.record.pid}  ${entry.record.url ?? ''}  ${entry.record.directory ?? ''}\n`,
+      );
+    }
+    process.exitCode = 1;
+    return;
+  }
+  signalOne(alive[0]!.record.pid);
+}
+
+/** Send SIGTERM to one bridge and wait briefly for it to go, so the next command sees the truth. */
+function signalOne(pid: number): void {
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch (error) {
+    process.stderr.write(`  could not signal ${pid}: ${String(error)}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  process.stdout.write(`  sent SIGTERM to ${pid}\n`);
+  // Up to ~3s: the bridge closes the server, unregisters, and kills its agent.
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    if (!isAlive(pid)) {
+      process.stdout.write(`  ${pid} exited\n`);
+      pruneDaemons();
+      return;
+    }
+    try {
+      execFileSync(process.execPath, ['-e', 'setTimeout(() => {}, 100)']);
+    } catch {
+      /* busy-wait shim: Node has no sleepSync */
+    }
+  }
+  process.stdout.write(`  ${pid} is still running after 3s; it will exit when its turn ends\n`);
+  process.stdout.write(`  (the agent it spawned dies with it; SIGKILL would orphan the agent)\n`);
+}
+
 function runPsCommand(args: ParsedArgs): void {
   const entries = listDaemons();
   const alive = entries.filter((entry) => entry.alive);
@@ -1918,6 +2047,10 @@ async function main(): Promise<void> {
   }
   if (args.bridgeCommand === 'ps') {
     runPsCommand(args);
+    return;
+  }
+  if (args.bridgeCommand === 'stop') {
+    runStopCommand(args);
     return;
   }
 
