@@ -101,6 +101,34 @@ agent's models" came from. So the TUI's tab layout is isolated per agent
 (`~/.opencode-acp-client/opencode/<agent-slug>/`), and a session belonging to another agent is
 refused (`404`). `--` is for a **new** session only.
 
+### Use it from opencode desktop instead of the TUI
+
+The desktop speaks the same HTTP API as the TUI, so it can talk to this bridge instead of to
+opencode's own server. Start a bridge, then point the desktop at it:
+
+```bash
+oc-acp-client --bridge-port 8765 . -- qwen --acp
+```
+
+It prints one line with the address it is serving — `http://127.0.0.1:8765` — and that is the server
+to add in the desktop. From there it is ordinary desktop use: add the project, open a conversation.
+
+**The bridge keeps running until you stop it.** It has no way of knowing the desktop closed, so
+when you are done:
+
+```bash
+oc-acp-client ps            # what is running: pid, agent, directory, URL
+oc-acp-client stop          # stop it (add <pid> or --all when there are several)
+```
+
+`stop` shuts the agent down with the bridge, so nothing is left behind.
+
+**One bridge, one agent**, same as the TUI — two agents means two bridges on two ports, which is
+also how the desktop shows them as two servers.
+
+★ `--bridge-host 0.0.0.0` accepts connections from other machines and **has no authentication**;
+keep the default `127.0.0.1` unless you know the network is trusted.
+
 ## Common options
 
 | Option | Meaning |
