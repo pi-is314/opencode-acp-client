@@ -233,6 +233,16 @@ function discoverAgents() {
       id: 'copilot',
       command: ['copilot', '--acp'],
     },
+    {
+      // Qoder CLI, CN build. The international `qodercli` and this one are separate products with
+      // separate accounts: a CN token is rejected by the international build and vice versa, and the
+      // CN config lives under `~/.qoder-cn/`. Auth is one variable, no browser; a BYOK model has to be
+      // declared at the TOP LEVEL of `~/.qoder-cn/settings.json` (`providers` + `model`) — the
+      // `modelConfigs` block the binary's schema advertises does nothing on its own (see
+      // docs/AGENT-SETUP §9 in the owner's notes).
+      id: 'qoder',
+      command: ['qoderclicn', '--acp'],
+    },
   ];
   return candidates;
 }
