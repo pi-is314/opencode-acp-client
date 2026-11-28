@@ -458,7 +458,11 @@ async function main() {
     // straight after "added" hit an empty tree, while the same click after the tree had painted
     // listed the session. So: go back, wait for the row to appear, then expand it — polling the
     // WHOLE path each attempt so a slow paint cannot be mistaken for a missing session.
-    const sidebarRow = /127\.0\.0\.1:\d+/;
+    // ★ Built from the URL the bridge actually serves: the harness binds a NON-loopback address on
+    // purpose (`directoryPickerKind` opens the web picker only for a remote server), so a hardcoded
+    // `127\.0\.0\.1:\d+` matched nothing while the row was right there on screen.
+    const bridgeHost = new URL(bridgeUrl).host;
+    const sidebarRow = new RegExp(bridgeHost.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
     await cdp.eval(`
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const text = (el) => (el.innerText || '').trim();
@@ -477,6 +481,30 @@ async function main() {
       return typeof body === 'string' && sidebarRow.test(body) ? body : undefined;
     }, 30_000);
     rowPainted ? ok('the sidebar lists the new server') : bad('the sidebar never listed the new server');
+
+    // ★ CLICK THE BRIDGE'S ROW — this is what selects the server, and the session query is gated
+    // on a selection, not on the row existing. Measured by hand in the same desktop: adding the
+    // server left `selected: false` on the bridge row until that row was clicked, and only then did
+    // `/api/session` run against it. Writing `home.selection` into localStorage (the fallback below)
+    // looked right on read-back and still left the row unselected, so runtime state is what counts.
+    const selected = await cdp
+      .eval(`
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const want = ${JSON.stringify(bridgeHost)};
+        const click = (el) => {
+          for (const type of ['pointerdown', 'pointerup']) el.dispatchEvent(new PointerEvent(type, { bubbles: true }));
+          el.click();
+        };
+        const rows = [...document.querySelectorAll('[data-action="home-project-new-session"], [data-action="home-server-collapse"], button')];
+        const row = rows.find((el) => (el.innerText || '').includes(want));
+        if (!row) return { clicked: false, reason: 'row not found' };
+        click(row);
+        await sleep(3000);
+        return { clicked: true, text: (row.innerText || '').slice(0, 40) };
+      `)
+      .catch((error) => ({ error: String(error) }));
+    console.log('  … clicked the bridge row:', JSON.stringify(selected));
+    await sleep(6000);
 
     // ★ Let the app SETTLE before expanding. Measured side by side: adding the server, waiting,
     // and THEN clicking the group made the desktop fetch
@@ -833,14 +861,27 @@ async function main() {
           (globalThis).__flips = flips;
           await sleep(4000);
           // a second pass: the first click can land before the tree has painted
-          if (!document.body.innerText.includes(session.id)) {
+          // The sidebar renders a session's TITLE, not its id; accept either so the retry pass
+          // recognises a row that is already there under its name.
+          const ident = [session.id, session.title, String(session.directory ?? '').split(/[\\/]/).filter(Boolean).pop()].filter(Boolean);
+          if (!ident.some((value) => document.body.innerText.includes(value))) {
             const again = rows().find((r) => text(r).includes(hostPort));
             if (again) { click(focusButton(again)); await sleep(3000); }
           }
         }
         return document.body.innerText;
       `);
-      return typeof body === 'string' && body.includes(session.id) ? body : undefined;
+      // ★ The sidebar can label a session with its title, its id, OR the directory's basename
+      // (what a session created without a name shows). Matching only the id missed rows that were
+      // plainly on screen: measured `body text: "… New session / oac-desktop-5M20Dl"` with
+      // `selected: true` on the bridge row and both of the first two lookups negative.
+      const base = String(session.directory ?? '').split(/[\\/]/).filter(Boolean).pop() ?? '';
+      const identifiable = [session.id, session.title, base].filter(
+        (value) => typeof value === 'string' && value.length > 0,
+      );
+      return typeof body === 'string' && identifiable.some((value) => body.includes(value))
+        ? body
+        : undefined;
     }, 60_000);
     if (listed) ok(`the session ${session.id} is listed under the new server`);
     else {
@@ -849,6 +890,13 @@ async function main() {
       bad(`the session never appeared in the sidebar (bridge saw: ${bridgeRoutes().join(' ; ') || 'no requests'})`);
       console.log(`    sidebar was:\n${String(dump).split('\n').map((line) => `      | ${line}`).join('\n')}`);
     }
+
+    // The three spellings, computed once and reused inside the page script below.
+    const identJson = JSON.stringify(
+      [session.id, session.title, String(session.directory ?? '').split(/[\\/]/).filter(Boolean).pop()].filter(
+        (value) => typeof value === 'string' && value.length > 0,
+      ),
+    );
 
     const sent = await cdp.eval(`
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -859,13 +907,25 @@ async function main() {
       // back out of settings, then open the session
       const back = [...document.querySelectorAll('button')].find((b) => /^(Back to app|返回应用)$/.test((b.innerText || '').trim()));
       if (back) { click(back); await sleep(1500); }
-      const row = [...document.querySelectorAll('button,[role=button]')].find((b) => (b.innerText || '').includes(${JSON.stringify(session.id)}));
+      // Same three spellings the sidebar may label a session with (see the check above).
+      const ident = ${identJson};
+      const row = [...document.querySelectorAll('button,[role=button]')].find((b) =>
+        ident.some((value) => (b.innerText || '').includes(value)),
+      );
       if (!row) return 'session row not found';
       click(row);
-      await sleep(2500);
-      // the composer IS contenteditable=true (also role=textbox) — the modern shell
-      const editor = document.querySelector('[role=textbox][contenteditable=true]') || document.querySelector('[contenteditable=true]');
-      if (!editor) return 'no composer';
+      // ★ Wait for the composer instead of assuming 2.5s is enough. Opening a session re-renders
+      // the whole view and the editor is mounted last; a fixed sleep reported "no composer" on a
+      // session that was already open (measured with a real click on the row).
+      let editor;
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        editor =
+          document.querySelector('[role=textbox][contenteditable=true]') ||
+          [...document.querySelectorAll('[contenteditable=true]')].find((el) => el.isContentEditable);
+        if (editor) break;
+        await sleep(500);
+      }
+      if (!editor) return 'no composer after 20s';
       editor.focus();
       editor.textContent = 'hello from desktop e2e';
       editor.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'hello from desktop e2e' }));
