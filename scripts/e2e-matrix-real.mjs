@@ -243,6 +243,15 @@ function discoverAgents() {
       id: 'qoder',
       command: ['qoderclicn', '--acp'],
     },
+    {
+      // Kimi Code CLI. `kimi acp` is the documented ACP entry point, and providers live in
+      // `~/.kimi-code/config.toml` — `[providers.<name>]` with `type = "openai"` and
+      // `api_key_env` naming a variable, so the key never has to be written into the file. The
+      // binary installs to `~/.kimi-code/bin`, which the installer adds to `.bashrc` rather than to
+      // the PATH a GUI or a script inherits.
+      id: 'kimi',
+      command: ['kimi', 'acp'],
+    },
   ];
   return candidates;
 }
