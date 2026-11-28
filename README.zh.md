@@ -94,6 +94,21 @@ tab 混在一个 TUI 里，正是「新 tab 显示成另一个 agent 的模型�
 agent 隔离（`~/.opencode-acp-client/opencode/<agent-slug>/`），属于其它 agent 的会话会被拒绝
 （`404`）。`--` 只用于**新建**会话。
 
+### 使用 opencode web UI
+
+同一套界面也是一个网页。桥从自己的 origin 发它，页面借自一个运行中的 `opencode serve` —— API 仍然是
+桥的，所以页面是在和你的 agent 对话，而不是和 opencode 自己的会话。所以两个进程都要有：
+
+```bash
+opencode serve --hostname 127.0.0.1 --port 4096 &
+oc-acp-client --bridge-port 8765 --web-proxy http://127.0.0.1:4096 \
+  --web-password "$(openssl rand -hex 16)" . -- qwen --acp
+```
+
+打开 `http://127.0.0.1:8765/`，用起来和 desktop 一样。带 `--web-proxy` 时**必须给密码** —— 这个页面
+能驱动 agent，而且它是一个会被收藏的 URL。只有其它机器发来的请求会被要求，本机的 TUI 和 desktop 走
+loopback，不受影响。也可以用 `OPENCODE_WEB_PASSWORD`，免得留在 shell 历史里。
+
 ## 常用参数
 
 | 参数 | 含义 |

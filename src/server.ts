@@ -82,6 +82,7 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 
 import { AcpClient, AcpError } from './acp/client.js';
+import { forwardStatic, isLoopback, passwordAccepted } from './web-proxy.js';
 import { filterPromptBlocks } from './acp/capabilities.js';
 import { UPDATE } from './acp/types.js';
 import type {
@@ -226,6 +227,17 @@ export interface BridgeServerOptions {
    * its sessions are per-tab and start on the first message.
    */
   eagerCatalog?: boolean;
+  /**
+   * Base URL of a running `opencode serve` whose web UI this bridge should serve from its own
+   * origin. Unset means no page at all — the default, because a person running the TUI did not ask
+   * for a browser UI on their port. See `docs/WEB-UI.md`.
+   */
+  webProxy?: string;
+  /**
+   * Password the web UI must present. Required whenever `webProxy` is set: the page is a URL a
+   * person bookmarks, and everything reachable through it can drive the agent.
+   */
+  webPassword?: string;
   onLog?: (line: string) => void;
 }
 
@@ -1442,12 +1454,76 @@ export class BridgeServer {
       json({ output: null });
       return;
     }
+    // ★ Everything under `/api/` is OURS, always — including the routes we do not implement, which
+    // answer the shaped empty envelope the clients expect. The web UI's page and assets are the
+    // only things taken from elsewhere, and they live outside `/api/`. See docs/WEB-UI.md.
+    if (!path.startsWith('/api/') && this.options.webProxy) {
+      await this.serveWebUi(req, res, method, path);
+      return;
+    }
     this.log(`[bridge] unhandled route: ${method} ${path}`);
     if (path.startsWith('/api/')) {
       located([]);
       return;
     }
     json({ error: `not implemented: ${method} ${path}` }, 404);
+  }
+
+  /**
+   * Serve the web UI: the page and its assets from the configured helper, everything else from the
+   * answers above.
+   *
+   * ★ The password rule is about WHERE the request came from, not which client it is: the TUI and
+   * the desktop connect over loopback and send no credentials, and demanding one of them would
+   * break every existing setup. A page on a routable port is a different matter — that is a URL a
+   * person bookmarks, and everything behind it can drive the agent.
+   *
+   * ★ Assets stay public even when the password is required, exactly as on a real `opencode serve`:
+   * the page has to paint before it can ask for one, and nothing in an asset is a secret.
+   */
+  private async serveWebUi(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    method: string,
+    path: string,
+  ): Promise<void> {
+    const proxy = this.options.webProxy;
+    if (!proxy) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end(`not implemented: ${method} ${path}`);
+      return;
+    }
+    // Only a GET (or HEAD) can paint a page; anything else is a client mistake, said plainly.
+    if (method !== 'GET' && method !== 'HEAD') {
+      res.writeHead(405, { 'content-type': 'text/plain; charset=utf-8', allow: 'GET, HEAD' });
+      res.end(`${method} is not supported for the web UI\n`);
+      return;
+    }
+    // ★ `/api/*` is answered above and never reaches here — that is enforced by the caller, and
+    // re-checked because a proxy that swallows the API would silently serve opencode's sessions
+    // instead of the agent's.
+    if (path.startsWith('/api/')) {
+      res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('internal: /api/* must never be proxied\n');
+      return;
+    }
+
+    const password = this.options.webPassword;
+    const isPage = path === '/' || path === '/index.html';
+    if (password && !isLoopback(req)) {
+      if (!passwordAccepted(req, password)) {
+        this.log(`[web] 401 ${method} ${path} (no password from ${req.socket.remoteAddress ?? '?'})`);
+        res.writeHead(401, {
+          'content-type': 'text/plain; charset=utf-8',
+          'www-authenticate': 'Basic realm="Secure Area"',
+        });
+        res.end('Authentication required\n');
+        return;
+      }
+    }
+    const status = await forwardStatic(req, res, { base: proxy });
+    // One line per asset is noise; the page itself and anything that failed is worth seeing.
+    if (isPage || status >= 400) this.log(`[web] ${status} ${method} ${path}`);
   }
 
   private async handleSessionRoute(

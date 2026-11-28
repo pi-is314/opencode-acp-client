@@ -101,6 +101,23 @@ agent's models" came from. So the TUI's tab layout is isolated per agent
 (`~/.opencode-acp-client/opencode/<agent-slug>/`), and a session belonging to another agent is
 refused (`404`). `--` is for a **new** session only.
 
+### Using the opencode web UI
+
+The same interface is also a web page. The bridge serves it from its own origin, borrowing the page
+from a running `opencode serve` — the API stays the bridge's, so the page talks to your agent rather
+than to opencode's own sessions. That needs both processes:
+
+```bash
+opencode serve --hostname 127.0.0.1 --port 4096 &
+oc-acp-client --bridge-port 8765 --web-proxy http://127.0.0.1:4096 \
+  --web-password "$(openssl rand -hex 16)" . -- qwen --acp
+```
+
+Open `http://127.0.0.1:8765/`; it behaves like the desktop. **A password is required** whenever
+`--web-proxy` is set — the page can drive the agent and it is a URL someone will bookmark. It is
+asked only of requests from other machines: the TUI and the desktop on this machine connect over
+loopback and are unaffected. `OPENCODE_WEB_PASSWORD` works too, so it stays out of the shell history.
+
 ## Common options
 
 | Option | Meaning |

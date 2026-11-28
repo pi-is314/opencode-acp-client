@@ -148,6 +148,10 @@ interface ParsedArgs {
    * Handled in `main` before the agent preflight, like the native ones.
    */
   bridgeCommand?: 'ps' | 'stop' | 'sessions' | 'upgrade';
+  /** `--web-proxy <url>`: serve the opencode web UI, borrowed from that server. */
+  webProxy?: string;
+  /** `--web-password <pass>`: what the web UI must present. */
+  webPassword?: string;
   psJson: boolean;
   sessionsJson: boolean;
   /** 0 means every row (`--all`). */
@@ -419,6 +423,10 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   let portSpecified = false;
   /** `--bridge-host` was given (it is only meaningful with a server). */
   let hostSpecified = false;
+  /** `--web-proxy <url>`: serve the opencode web UI from this bridge, borrowed from that server. */
+  let webProxy: string | undefined;
+  /** `--web-password <pass>` (or OPENCODE_WEB_PASSWORD): what that page must present. */
+  let webPassword: string | undefined;
   // The bridge's workspace: the FIRST bare positional (opencode's own
   // `opencode [flags] [<directory>]` spelling), defaulting to the cwd.
   let directory: string | undefined;
@@ -628,6 +636,14 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
       hostSpecified = true;
       continue;
     }
+    if (arg === '--web-proxy' || arg.startsWith('--web-proxy=')) {
+      webProxy = arg === '--web-proxy' ? String(argv[++index]) : arg.slice('--web-proxy='.length);
+      continue;
+    }
+    if (arg === '--web-password' || arg.startsWith('--web-password=')) {
+      webPassword = arg === '--web-password' ? String(argv[++index]) : arg.slice('--web-password='.length);
+      continue;
+    }
     if (arg === '--bridge-log' || arg.startsWith('--bridge-log=')) {
       logPath = arg === '--bridge-log' ? String(argv[++index]) : arg.slice('--bridge-log='.length);
       continue;
@@ -776,6 +792,8 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     ...(sessionsWidth ? { sessionsWidth } : {}),
     psPrune,
     psKill,
+    webProxy,
+    webPassword,
     stopPid,
     stopAll,
     agentCommand,
@@ -943,6 +961,8 @@ export function printHelp(): void {
         // users at it would be advertising a trap.
         ['--bridge-port <n>', 'Pin the port instead of choosing a free one; no TUI'],
         ['--bridge-host <a>', 'Listen address (default 127.0.0.1; 0.0.0.0 accepts other machines, and the bridge has no auth)'],
+        ['--web-proxy <url>', 'Serve the opencode web UI, borrowing the page from a running `opencode serve` at <url>; /api/* is always answered here'],
+        ['--web-password <p>', 'What that page must present (or OPENCODE_WEB_PASSWORD); required with --web-proxy, and only asked of non-loopback requests'],
         ['--bridge-log <p>', 'Bridge log path (default: stderr, or a file under TMPDIR once the TUI starts)'],
         ['--no-tui', 'Serve HTTP/SSE only; prints a ready line carrying the chosen port, for a script to read'],
         ['--version, -v', "Show this package's version"],
@@ -2168,6 +2188,8 @@ async function main(): Promise<void> {
     resumeSession: resolvedSession,
     resumeVisibleSessionId: args.session,
     eagerCatalog: process.env['OPENCODE_ACP_CLIENT_EAGER_CATALOG'] === '1',
+    webProxy: args.webProxy,
+    webPassword: args.webPassword ?? process.env['OPENCODE_WEB_PASSWORD'],
     continueMode: false,
     onLog: log,
   });
