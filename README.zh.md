@@ -94,10 +94,9 @@ tab 混在一个 TUI 里，正是「新 tab 显示成另一个 agent 的模型�
 agent 隔离（`~/.opencode-acp-client/opencode/<agent-slug>/`），属于其它 agent 的会话会被拒绝
 （`404`）。`--` 只用于**新建**会话。
 
-### 用 opencode desktop 代替 TUI
+### 使用 opencode desktop
 
-desktop 说的是和 TUI 同一套 HTTP 接口，所以它可以连这个桥，而不是连 opencode 自己的服务端。
-起一个桥，然后把 desktop 指过来：
+desktop 说的是和 TUI 同一套 HTTP 接口，所以它也可以连这个桥。起一个桥，然后把 desktop 指过来：
 
 ```bash
 oc-acp-client --bridge-port 8765 . -- qwen --acp

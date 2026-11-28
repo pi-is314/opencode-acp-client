@@ -101,10 +101,10 @@ agent's models" came from. So the TUI's tab layout is isolated per agent
 (`~/.opencode-acp-client/opencode/<agent-slug>/`), and a session belonging to another agent is
 refused (`404`). `--` is for a **new** session only.
 
-### Use it from opencode desktop instead of the TUI
+### Using opencode desktop
 
-The desktop speaks the same HTTP API as the TUI, so it can talk to this bridge instead of to
-opencode's own server. Start a bridge, then point the desktop at it:
+The desktop speaks the same HTTP API as the TUI, so it can talk to this bridge. Start one, then
+point the desktop at it:
 
 ```bash
 oc-acp-client --bridge-port 8765 . -- qwen --acp
